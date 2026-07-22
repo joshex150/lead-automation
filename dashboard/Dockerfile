@@ -1,4 +1,5 @@
-# YEAN approval dashboard — Railway-ready (Next.js standalone output)
+# YEAN approval dashboard, per-folder build (Root Directory = dashboard).
+# Runs `next start` so the start command matches Railway's own builder too.
 FROM node:22-alpine AS build
 WORKDIR /app
 COPY package.json ./
@@ -10,13 +11,15 @@ ARG NEXT_PUBLIC_API_URL
 ARG NEXT_PUBLIC_API_KEY
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL \
     NEXT_PUBLIC_API_KEY=$NEXT_PUBLIC_API_KEY
-RUN npm run build
+RUN npm run build && npm prune --omit=dev
 
 FROM node:22-alpine
 WORKDIR /app
-ENV NODE_ENV=production HOSTNAME=0.0.0.0 PORT=3000
-COPY --from=build /app/.next/standalone ./
-COPY --from=build /app/.next/static ./.next/static
+ENV NODE_ENV=production PORT=3000
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/.next ./.next
 COPY --from=build /app/public ./public
+COPY --from=build /app/package.json ./package.json
+COPY --from=build /app/next.config.mjs ./next.config.mjs
 EXPOSE 3000
-CMD ["node", "server.js"]
+CMD ["npm", "run", "start"]

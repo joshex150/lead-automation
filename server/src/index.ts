@@ -18,8 +18,10 @@ import { logger } from "./utils/logger.js";
 
 async function main(): Promise<void> {
   const app = createApp();
-  const server = app.listen(config.PORT, () => {
-    logger.info({ port: config.PORT, env: config.NODE_ENV }, "HTTP server listening");
+  // Bind to 0.0.0.0 explicitly so the container is reachable by the platform's
+  // health check and router (some environments don't route to the default host).
+  const server = app.listen(config.PORT, "0.0.0.0", () => {
+    logger.info({ port: config.PORT, env: config.NODE_ENV }, "HTTP server listening on 0.0.0.0");
     if (!config.API_KEY) {
       logger.warn("API_KEY is not set, the API is UNAUTHENTICATED. Set API_KEY before deploying.");
     }

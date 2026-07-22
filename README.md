@@ -67,11 +67,11 @@ Or run everything with Docker: `docker compose up --build`.
 Full walkthrough: **[docs/RAILWAY_DEPLOY.md](docs/RAILWAY_DEPLOY.md)**. Short version:
 
 1. Create a Railway project → **Deploy MongoDB** from the template gallery.
-2. **New service → GitHub repo** for the API. Railway uses the root `Dockerfile` automatically, no Root Directory or Dockerfile Path needed. Add env vars (`MONGODB_URI=${{MongoDB.MONGO_URL}}`, `API_KEY`, optionally `GOOGLE_PLACES_API_KEY` and AI/email keys, or set those later in the dashboard). Set the health check path to `/health`.
-3. **New service → same repo** for the dashboard. Set **Dockerfile Path = `Dockerfile.dashboard`** and build args `NEXT_PUBLIC_API_URL` (the API's public URL) and `NEXT_PUBLIC_API_KEY`.
+2. **New service → GitHub repo** for the API. Set **Settings → Source → Root Directory = `server`**. Add env vars (`MONGODB_URI=${{MongoDB.MONGO_URL}}`, `API_KEY`, optionally `GOOGLE_PLACES_API_KEY` and AI/email keys, or set those later in the dashboard).
+3. **New service → same repo** for the dashboard. Set **Root Directory = `dashboard`** and build args `NEXT_PUBLIC_API_URL` (the API's public URL) and `NEXT_PUBLIC_API_KEY`.
 4. Done. First open of the dashboard runs the setup wizard; the server's built-in cron then discovers leads every morning (Africa/Lagos) and queues pitches for you.
 
-Full walkthrough, including the reference table of every Dockerfile: [docs/RAILWAY_DEPLOY.md](docs/RAILWAY_DEPLOY.md).
+Setting each service's Root Directory is the one thing that matters on a monorepo; the repo handles the rest whether Railway builds with Docker or its own builder. Full walkthrough: [docs/RAILWAY_DEPLOY.md](docs/RAILWAY_DEPLOY.md).
 
 ## Configuration
 
