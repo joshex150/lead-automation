@@ -96,7 +96,7 @@ async function main() {
     logger.info({ business: lead.businessName, stage: lead.pipelineStage, score: lead.leadScore }, "seeded");
   }
 
-  logger.info({ created }, "seed complete — open the dashboard and check the approval queue");
+  logger.info({ created }, "seed complete, open the dashboard and check the approval queue");
   await disconnectDb();
 }
 

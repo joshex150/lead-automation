@@ -2,7 +2,7 @@ import mongoose, { Schema, type Document, type Model } from "mongoose";
 import { SUPPRESSION_TYPES, type SuppressionType } from "../types.js";
 
 /**
- * Suppression list — anyone here is never contacted again.
+ * Suppression list, anyone here is never contacted again.
  * Entries can be an email, a phone (E.164), a domain, an Instagram
  * username, or a Google Place ID. Values are stored normalized
  * (lowercase / E.164) so lookups are exact-match.

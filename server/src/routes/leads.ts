@@ -9,13 +9,12 @@ import { processLead } from "../services/pipeline/runPipeline.js";
 import { generatePitch, pitchContextFromLead } from "../services/pitch/generatePitch.js";
 import { scoreLead } from "../services/scoring/leadScore.js";
 import { optOutLead } from "../services/suppression.js";
-import { createDraftForLead, emailsSentToday, sendDraft, sendEmail } from "../services/outreach/gmail.js";
-import { integrations } from "../config/index.js";
+import { createDraftForLead, emailsSentToday, getActiveEmail, sendPitchForLead } from "../services/outreach/email/index.js";
 import { normalizeNigerianPhone } from "../utils/phone.js";
 
 export const leadsRouter = Router();
 
-/** GET /api/leads — filterable, paginated list. */
+/** GET /api/leads, filterable, paginated list. */
 leadsRouter.get(
   "/",
   asyncHandler(async (req, res) => {
@@ -79,7 +78,7 @@ function loadLead(id: string) {
   return Lead.findById(id);
 }
 
-/** GET /api/leads/:id — full lead + outreach history. */
+/** GET /api/leads/:id, full lead + outreach history. */
 leadsRouter.get(
   "/:id",
   asyncHandler(async (req, res) => {
@@ -113,7 +112,7 @@ const updateSchema = z
   })
   .strict();
 
-/** PATCH /api/leads/:id — manual edits (pitch, contacts, IG confirmation …). */
+/** PATCH /api/leads/:id, manual edits (pitch, contacts, IG confirmation …). */
 leadsRouter.patch(
   "/:id",
   validateBody(updateSchema),
@@ -174,13 +173,13 @@ leadsRouter.patch(
   }),
 );
 
-/** POST /api/leads/:id/approve — approve pitch; creates Gmail draft when possible. */
+/** POST /api/leads/:id/approve, approve pitch; creates Gmail draft when possible. */
 leadsRouter.post(
   "/:id/approve",
   asyncHandler(async (req, res) => {
     const lead = await loadLead(req.params.id);
     if (!lead) return res.status(404).json({ error: "Lead not found" });
-    if (lead.optedOut) return res.status(409).json({ error: "Lead has opted out — cannot approve" });
+    if (lead.optedOut) return res.status(409).json({ error: "Lead has opted out, cannot approve" });
     if (!lead.pitchMessage) return res.status(409).json({ error: "Lead has no pitch to approve" });
 
     lead.approval.status = "APPROVED";
@@ -189,19 +188,20 @@ leadsRouter.post(
     lead.approval.notes = (req.body?.notes as string) ?? undefined;
     lead.pipelineStage = "APPROVED";
 
-    let draft: { draftId: string } | null = null;
+    let draft: { draftId: string | null; provider: string; internal: boolean } | null = null;
     let draftError: string | null = null;
     if (lead.outreachChannel === "EMAIL" && lead.email) {
-      if (integrations.gmailConfigured) {
+      const { provider } = await getActiveEmail();
+      if (provider) {
         try {
           draft = await createDraftForLead(lead);
-          lead.gmailDraftId = draft.draftId;
+          if (draft.draftId) lead.gmailDraftId = draft.draftId;
           lead.outreachStatus = "DRAFT_CREATED";
         } catch (err) {
           draftError = err instanceof Error ? err.message : String(err);
         }
       } else {
-        draftError = "Gmail not configured — approve recorded, draft not created";
+        draftError = "No email provider configured, approve recorded, draft not created";
       }
     }
 
@@ -218,7 +218,7 @@ leadsRouter.post(
   }),
 );
 
-/** POST /api/leads/:id/reject — reject the pitch / lead. */
+/** POST /api/leads/:id/reject, reject the pitch / lead. */
 leadsRouter.post(
   "/:id/reject",
   asyncHandler(async (req, res) => {
@@ -244,19 +244,20 @@ leadsRouter.post(
   }),
 );
 
-/** POST /api/leads/:id/send — send the approved email (draft or direct). */
+/** POST /api/leads/:id/send, send the approved email (draft or direct). */
 leadsRouter.post(
   "/:id/send",
   asyncHandler(async (req, res) => {
     const lead = await loadLead(req.params.id);
     if (!lead) return res.status(404).json({ error: "Lead not found" });
-    if (lead.optedOut) return res.status(409).json({ error: "Lead has opted out — cannot send" });
+    if (lead.optedOut) return res.status(409).json({ error: "Lead has opted out, cannot send" });
     if (lead.approval.status !== "APPROVED") {
       return res.status(409).json({ error: "Lead must be approved before sending" });
     }
     if (!lead.email) return res.status(409).json({ error: "Lead has no email address" });
-    if (!integrations.gmailConfigured) {
-      return res.status(503).json({ error: "Gmail is not configured" });
+    const { provider } = await getActiveEmail();
+    if (!provider) {
+      return res.status(503).json({ error: "No email provider is configured (Settings → Email)" });
     }
 
     const settings = await getSettings();
@@ -265,17 +266,8 @@ leadsRouter.post(
       return res.status(429).json({ error: `Daily email cap reached (${settings.dailyEmailCap})` });
     }
 
-    let sendResult: { messageId?: string; threadId?: string };
-    if (lead.gmailDraftId) {
-      sendResult = await sendDraft(lead.gmailDraftId);
-      lead.gmailDraftId = undefined;
-    } else {
-      sendResult = await sendEmail({
-        to: lead.email,
-        subject: lead.pitchSubject ?? `Your online presence — ${lead.businessName}`,
-        body: lead.pitchMessage ?? "",
-      });
-    }
+    const sendResult = await sendPitchForLead(lead);
+    lead.gmailDraftId = undefined;
 
     const now = new Date();
     lead.gmailMessageId = sendResult.messageId;
@@ -301,7 +293,7 @@ leadsRouter.post(
   }),
 );
 
-/** POST /api/leads/:id/mark-contacted — manual Instagram/WhatsApp outreach done. */
+/** POST /api/leads/:id/mark-contacted, manual Instagram/WhatsApp outreach done. */
 leadsRouter.post(
   "/:id/mark-contacted",
   asyncHandler(async (req, res) => {
@@ -334,7 +326,7 @@ leadsRouter.post(
   }),
 );
 
-/** POST /api/leads/:id/response — record a reply. */
+/** POST /api/leads/:id/response, record a reply. */
 leadsRouter.post(
   "/:id/response",
   validateBody(
@@ -387,7 +379,7 @@ leadsRouter.post(
   }),
 );
 
-/** POST /api/leads/:id/convert — mark the lead as a paying client. 🎉 */
+/** POST /api/leads/:id/convert, mark the lead as a paying client. 🎉 */
 leadsRouter.post(
   "/:id/convert",
   asyncHandler(async (req, res) => {
@@ -412,7 +404,7 @@ leadsRouter.post(
   }),
 );
 
-/** POST /api/leads/:id/opt-out — NDPA right to object. */
+/** POST /api/leads/:id/opt-out, NDPA right to object. */
 leadsRouter.post(
   "/:id/opt-out",
   asyncHandler(async (req, res) => {
@@ -423,7 +415,7 @@ leadsRouter.post(
   }),
 );
 
-/** POST /api/leads/:id/recheck — re-run website check + rescore. */
+/** POST /api/leads/:id/recheck, re-run website check + rescore. */
 leadsRouter.post(
   "/:id/recheck",
   asyncHandler(async (req, res) => {
@@ -436,7 +428,7 @@ leadsRouter.post(
   }),
 );
 
-/** POST /api/leads/:id/regenerate-pitch — new AI pitch. */
+/** POST /api/leads/:id/regenerate-pitch, new AI pitch. */
 leadsRouter.post(
   "/:id/regenerate-pitch",
   asyncHandler(async (req, res) => {
@@ -459,7 +451,7 @@ leadsRouter.post(
   }),
 );
 
-/** DELETE /api/leads/:id — archive (soft delete). */
+/** DELETE /api/leads/:id, archive (soft delete). */
 leadsRouter.delete(
   "/:id",
   asyncHandler(async (req, res) => {

@@ -1,41 +1,61 @@
 import { createApp } from "./app.js";
-import { config, integrations } from "./config/index.js";
-import { connectDb, disconnectDb } from "./db/connect.js";
+import { config } from "./config/index.js";
+import { integrationStatus } from "./config/runtime.js";
+import { connectDbWithRetry, disconnectDb } from "./db/connect.js";
 import { getSettings } from "./models/Settings.js";
 import { startScheduler, stopScheduler } from "./services/scheduler.js";
 import { logger } from "./utils/logger.js";
 
-async function main(): Promise<void> {
-  await connectDb();
-  await getSettings(); // ensure the settings singleton exists
+/**
+ * Process entry. Hardened for unattended operation:
+ *  - the HTTP server starts immediately; MongoDB connects (and re-connects)
+ *    in the background, so a slow/absent DB never crash-loops the service;
+ *  - unhandled rejections / uncaught exceptions are logged, not fatal,
+ *    a single bad request or background hiccup must never take down the
+ *    whole outreach workflow;
+ *  - SIGINT/SIGTERM drain cleanly.
+ */
 
+async function main(): Promise<void> {
   const app = createApp();
   const server = app.listen(config.PORT, () => {
-    logger.info(
-      {
-        port: config.PORT,
-        env: config.NODE_ENV,
-        integrations: {
-          googlePlaces: integrations.placesConfigured,
-          ai: integrations.aiConfigured,
-          gmail: integrations.gmailConfigured,
-          auth: integrations.authEnabled,
-        },
-      },
-      "YEAN lead-automation server ready",
-    );
-    if (!integrations.authEnabled) {
-      logger.warn("API_KEY is not set — the API is UNAUTHENTICATED. Set API_KEY before deploying.");
+    logger.info({ port: config.PORT, env: config.NODE_ENV }, "HTTP server listening");
+    if (!config.API_KEY) {
+      logger.warn("API_KEY is not set, the API is UNAUTHENTICATED. Set API_KEY before deploying.");
     }
   });
 
-  startScheduler();
+  // Connect (retrying forever); once up, seed settings + start the scheduler.
+  void connectDbWithRetry(config.MONGODB_URI, {
+    onConnected: () => {
+      void (async () => {
+        try {
+          await getSettings(); // ensure the settings singleton exists
+          await startScheduler();
+          const status = await integrationStatus();
+          logger.info(
+            {
+              integrations: {
+                googlePlaces: status.googlePlaces.configured,
+                ai: `${status.ai.provider}${status.ai.configured ? "" : " (unconfigured)"}`,
+                email: `${status.email.provider}${status.email.configured ? "" : " (unconfigured)"}`,
+                auth: status.authEnabled,
+              },
+            },
+            "YEAN lead-automation server ready",
+          );
+        } catch (err) {
+          logger.error({ err: String(err) }, "post-connect initialisation failed (will still serve requests)");
+        }
+      })();
+    },
+  });
 
   const shutdown = async (signal: string) => {
     logger.info({ signal }, "shutting down");
     stopScheduler();
     server.close(async () => {
-      await disconnectDb();
+      await disconnectDb().catch(() => undefined);
       process.exit(0);
     });
     // Force-exit if close hangs.
@@ -43,6 +63,15 @@ async function main(): Promise<void> {
   };
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
+
+  // Last-resort guards: log and carry on. Individual requests/jobs already
+  // have their own error handling; these catch anything that slips through.
+  process.on("unhandledRejection", (reason) => {
+    logger.error({ err: reason instanceof Error ? reason.stack : String(reason) }, "unhandled promise rejection");
+  });
+  process.on("uncaughtException", (err) => {
+    logger.error({ err: err.stack ?? String(err) }, "uncaught exception, continuing");
+  });
 }
 
 main().catch((err) => {

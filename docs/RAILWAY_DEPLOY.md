@@ -40,12 +40,12 @@ Railway exposes the connection string as `${{MongoDB.MONGO_URL}}` for other serv
 
 1. **+ New → GitHub Repo →** same repo.
 2. **Settings → Root Directory:** `dashboard`
-3. **Settings → Build → Build args** (or Variables — Railway forwards them to the Docker build):
+3. **Settings → Build → Build args** (or Variables, Railway forwards them to the Docker build):
    ```
    NEXT_PUBLIC_API_URL=https://yean-api.up.railway.app
    NEXT_PUBLIC_API_KEY=<same API_KEY as the server>
    ```
-4. **Generate Domain.** Open it — you should see the overview page.
+4. **Generate Domain.** Open it, you should see the overview page.
 5. Go back to the API service and set `DASHBOARD_ORIGIN` to this dashboard URL (CORS), then redeploy the API.
 
 ## 4. First run
@@ -56,7 +56,7 @@ Railway exposes the connection string as `${{MongoDB.MONGO_URL}}` for other serv
 
 ## 5. Scheduling notes
 
-- The API has a **built-in scheduler** (`ENABLE_SCHEDULER=true`) — no extra service needed.
+- The API has a **built-in scheduler** (`ENABLE_SCHEDULER=true`), no extra service needed.
 - Prefer n8n? Set `ENABLE_SCHEDULER=false` and import `n8n/workflow.json` (see `n8n/README.md`) so runs aren't triggered twice.
 
 ## 6. Costs & scaling
@@ -72,5 +72,5 @@ Railway exposes the connection string as `${{MongoDB.MONGO_URL}}` for other serv
 | Dashboard shows "Can't reach the API" | Check `NEXT_PUBLIC_API_URL` build arg + API `DASHBOARD_ORIGIN` (CORS) + `NEXT_PUBLIC_API_KEY` matches `API_KEY`. |
 | `/api/*` returns 401 | Dashboard's `NEXT_PUBLIC_API_KEY` ≠ server `API_KEY`. |
 | Discovery returns 503 | `GOOGLE_PLACES_API_KEY` missing or Places API (New) not enabled/billed. |
-| Approve works but no draft | Gmail vars missing/invalid — check the server logs; approval still recorded. |
+| Approve works but no draft | Gmail vars missing/invalid, check the server logs; approval still recorded. |
 | Health check failing on deploy | Ensure `PORT` matches Railway's injected port (Railway sets `PORT` automatically; the app reads it). |

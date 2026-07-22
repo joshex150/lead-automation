@@ -17,7 +17,7 @@ import {
 
 /**
  * A contact-provenance record: where each piece of contact data came from.
- * Required by our compliance controls (NDPA — record the source of every
+ * Required by our compliance controls (NDPA, record the source of every
  * email / phone number we process).
  */
 export interface ContactSource {

@@ -15,7 +15,7 @@ const discoverSchema = z
   })
   .default({});
 
-/** POST /api/pipeline/discover — run discovery only. */
+/** POST /api/pipeline/discover, run discovery only. */
 pipelineRouter.post(
   "/discover",
   validateBody(discoverSchema),
@@ -25,7 +25,7 @@ pipelineRouter.post(
   }),
 );
 
-/** POST /api/pipeline/process — process leads awaiting check/score/pitch. */
+/** POST /api/pipeline/process, process leads awaiting check/score/pitch. */
 pipelineRouter.post(
   "/process",
   asyncHandler(async (req, res) => {
@@ -35,7 +35,7 @@ pipelineRouter.post(
   }),
 );
 
-/** POST /api/pipeline/run — full pipeline (discover + process). */
+/** POST /api/pipeline/run, full pipeline (discover + process). */
 pipelineRouter.post(
   "/run",
   asyncHandler(async (_req, res) => {
@@ -44,7 +44,7 @@ pipelineRouter.post(
   }),
 );
 
-/** POST /api/pipeline/follow-ups — dispatch due follow-ups. */
+/** POST /api/pipeline/follow-ups, dispatch due follow-ups. */
 pipelineRouter.post(
   "/follow-ups",
   asyncHandler(async (_req, res) => {
@@ -53,7 +53,7 @@ pipelineRouter.post(
   }),
 );
 
-/** GET /api/pipeline/runs — discovery run history. */
+/** GET /api/pipeline/runs, discovery run history. */
 pipelineRouter.get(
   "/runs",
   asyncHandler(async (req, res) => {
@@ -63,7 +63,7 @@ pipelineRouter.get(
   }),
 );
 
-/** POST /api/pipeline/check-website — ad-hoc website check (also used by n8n). */
+/** POST /api/pipeline/check-website, ad-hoc website check (also used by n8n). */
 pipelineRouter.post(
   "/check-website",
   validateBody(z.object({ url: z.string().min(4) })),

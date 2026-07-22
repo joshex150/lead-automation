@@ -1,4 +1,4 @@
-import type { Lead, OutreachLogEntry, Settings, Stats, SuppressionEntry } from "./types";
+import type { IntegrationStatus, Lead, OutreachLogEntry, Settings, Stats, SuppressionEntry, TestResult } from "./types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY ?? "";
@@ -46,7 +46,11 @@ export const api = {
     req<{ lead: Lead }>(`/api/leads/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
 
   approve: (id: string, notes?: string) =>
-    req<{ lead: Lead; draft: { draftId: string } | null; draftError: string | null }>(`/api/leads/${id}/approve`, {
+    req<{
+      lead: Lead;
+      draft: { draftId: string | null; provider: string; internal: boolean } | null;
+      draftError: string | null;
+    }>(`/api/leads/${id}/approve`, {
       method: "POST",
       body: JSON.stringify({ notes }),
     }),
@@ -102,8 +106,14 @@ export const api = {
 
   settings: () => req<{ settings: Settings }>(`/api/settings`),
 
-  updateSettings: (patch: Partial<Settings>) =>
+  updateSettings: (patch: Record<string, unknown>) =>
     req<{ settings: Settings }>(`/api/settings`, { method: "PUT", body: JSON.stringify(patch) }),
+
+  integrationStatus: () => req<IntegrationStatus>(`/api/settings/integrations`),
+
+  testAi: () => req<TestResult>(`/api/settings/test-ai`, { method: "POST", body: "{}" }),
+  testEmail: () => req<TestResult>(`/api/settings/test-email`, { method: "POST", body: "{}" }),
+  testPlaces: () => req<TestResult>(`/api/settings/test-places`, { method: "POST", body: "{}" }),
 };
 
 export { ApiError };

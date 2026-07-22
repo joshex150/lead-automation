@@ -129,7 +129,15 @@ export interface Stats {
     totals: { found: number; created: number; duplicates: number; suppressed: number; processed: number; qualified: number };
   }>;
   recentActivity: OutreachLogEntry[];
-  integrations: { googlePlaces: boolean; ai: boolean; gmail: boolean; authEnabled: boolean };
+  integrations: {
+    googlePlaces: boolean;
+    ai: boolean;
+    aiProvider: string;
+    email: boolean;
+    emailProvider: string;
+    gmail: boolean;
+    authEnabled: boolean;
+  };
 }
 
 export interface SuppressionEntry {
@@ -139,6 +147,24 @@ export interface SuppressionEntry {
   reason?: string;
   source: string;
   createdAt: string;
+}
+
+export type AiProvider = "AUTO" | "OPENAI" | "ANTHROPIC" | "NVIDIA" | "CUSTOM" | "NONE";
+export type EmailProviderName = "AUTO" | "GMAIL" | "ZOHO" | "RESEND" | "NONE";
+
+export interface IntegrationSettings {
+  googlePlacesApiKey: string;
+  ai: { provider: AiProvider; apiKey: string; model: string; baseUrl: string };
+  email: {
+    provider: EmailProviderName;
+    fromAddress: string;
+    fromName: string;
+    gmail: { clientId: string; clientSecret: string; refreshToken: string };
+    zoho: { host: string; port: number; secure: boolean; user: string; password: string };
+    resend: { apiKey: string };
+  };
+  scheduler: { enabled: boolean | null; discoveryCron: string; followUpCron: string; timezone: string };
+  checker: { timeoutMs: number; maxRedirects: number; concurrency: number };
 }
 
 export interface Settings {
@@ -151,4 +177,25 @@ export interface Settings {
   dailyEmailCap: number;
   discoveryEnabled: boolean;
   maxResultsPerQuery: number;
+  integrations: IntegrationSettings;
+}
+
+export interface IntegrationStatus {
+  googlePlaces: { configured: boolean; source: string };
+  ai: { configured: boolean; provider: string; model: string; source: string };
+  email: { configured: boolean; provider: string; fromAddress: string; supportsDrafts: boolean; source: string };
+  scheduler: { enabled: boolean; discoveryCron: string; followUpCron: string; timezone: string };
+  authEnabled: boolean;
+}
+
+export interface TestResult {
+  ok: boolean;
+  provider?: string;
+  model?: string;
+  fromAddress?: string;
+  supportsDrafts?: boolean;
+  latencyMs?: number;
+  reply?: string;
+  sample?: string | null;
+  error?: string;
 }

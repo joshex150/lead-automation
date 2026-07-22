@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildRawEmail, COMPLIANCE_FOOTER } from "../src/services/outreach/gmail.js";
+import { buildRawEmail } from "../src/services/outreach/email/gmailProvider.js";
+import { COMPLIANCE_FOOTER } from "../src/services/outreach/email/index.js";
 
 describe("buildRawEmail", () => {
   it("builds a valid RFC2822 base64url message", () => {
@@ -23,7 +24,7 @@ describe("buildRawEmail", () => {
   it("RFC2047-encodes non-ASCII subjects", () => {
     const raw = buildRawEmail({
       to: "a@b.c",
-      subject: "Your café — let's talk",
+      subject: "Your café, let's talk",
       body: "x",
       from: "hello@yean.tech",
     });
@@ -32,7 +33,7 @@ describe("buildRawEmail", () => {
   });
 
   it("round-trips unicode bodies", () => {
-    const body = "Naija businesses 🇳🇬 — ₦50,000";
+    const body = "Naija businesses 🇳🇬, ₦50,000";
     const raw = buildRawEmail({ to: "a@b.c", subject: "s", body, from: "x@y.z" });
     const decoded = Buffer.from(raw, "base64url").toString("utf8");
     const bodyPart = decoded.split("\r\n\r\n")[1];

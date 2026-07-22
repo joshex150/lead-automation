@@ -16,8 +16,8 @@ import {
 
 const NAV = [
   { href: "/", label: "Overview", icon: RiDashboardLine },
-  { href: "/queue", label: "Approval Queue", icon: RiInboxArchiveLine },
-  { href: "/leads", label: "All Leads", icon: RiContactsBook2Line },
+  { href: "/queue", label: "Approval queue", icon: RiInboxArchiveLine },
+  { href: "/leads", label: "All leads", icon: RiContactsBook2Line },
   { href: "/suppression", label: "Suppression", icon: RiForbidLine },
   { href: "/settings", label: "Settings", icon: RiSettings4Line },
 ];

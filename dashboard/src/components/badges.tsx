@@ -1,14 +1,14 @@
 import type { WebsiteType } from "@/lib/types";
 
 const WEBSITE_TYPE_STYLES: Record<WebsiteType, { label: string; cls: string }> = {
-  NO_WEBSITE: { label: "No Website", cls: "bg-rose-500/15 text-rose-600 dark:text-rose-400 ring-rose-500/30" },
-  BROKEN_WEBSITE: { label: "Broken Website", cls: "bg-red-500/15 text-red-600 dark:text-red-400 ring-red-500/30" },
+  NO_WEBSITE: { label: "No website", cls: "bg-rose-500/15 text-rose-600 dark:text-rose-400 ring-rose-500/30" },
+  BROKEN_WEBSITE: { label: "Broken website", cls: "bg-red-500/15 text-red-600 dark:text-red-400 ring-red-500/30" },
   SHOPIFY: { label: "Shopify", cls: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 ring-emerald-500/30" },
-  LINK_IN_BIO_ONLY: { label: "Link-in-bio Only", cls: "bg-amber-500/15 text-amber-600 dark:text-amber-400 ring-amber-500/30" },
-  MENU_PLATFORM_ONLY: { label: "Menu Platform", cls: "bg-orange-500/15 text-orange-600 dark:text-orange-400 ring-orange-500/30" },
-  SOCIAL_MEDIA_ONLY: { label: "Social Media Only", cls: "bg-fuchsia-500/15 text-fuchsia-600 dark:text-fuchsia-400 ring-fuchsia-500/30" },
-  CUSTOM_WEBSITE: { label: "Custom Website", cls: "bg-slate-500/15 text-slate-600 dark:text-slate-300 ring-slate-500/30" },
-  POOR_WEBSITE: { label: "Poor Website", cls: "bg-yellow-500/15 text-yellow-700 dark:text-yellow-400 ring-yellow-500/30" },
+  LINK_IN_BIO_ONLY: { label: "Link-in-bio only", cls: "bg-amber-500/15 text-amber-600 dark:text-amber-400 ring-amber-500/30" },
+  MENU_PLATFORM_ONLY: { label: "Menu platform", cls: "bg-orange-500/15 text-orange-600 dark:text-orange-400 ring-orange-500/30" },
+  SOCIAL_MEDIA_ONLY: { label: "Social media only", cls: "bg-fuchsia-500/15 text-fuchsia-600 dark:text-fuchsia-400 ring-fuchsia-500/30" },
+  CUSTOM_WEBSITE: { label: "Custom website", cls: "bg-slate-500/15 text-slate-600 dark:text-slate-300 ring-slate-500/30" },
+  POOR_WEBSITE: { label: "Poor website", cls: "bg-yellow-500/15 text-yellow-700 dark:text-yellow-400 ring-yellow-500/30" },
 };
 
 export function WebsiteTypeBadge({ type }: { type: WebsiteType }) {

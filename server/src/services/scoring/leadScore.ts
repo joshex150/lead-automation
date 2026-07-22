@@ -2,7 +2,7 @@ import type { ScoreBreakdownEntry, ScoreResult, ScoringWeights } from "../../typ
 import { DEFAULT_SCORING_WEIGHTS } from "../../types.js";
 
 /**
- * Lead scoring — pure function, weights configurable from Settings.
+ * Lead scoring, pure function, weights configurable from Settings.
  *
  * The score answers one question: "how likely is this business to pay
  * YEAN for a website?" High scores = clear need (no/broken/rented web

@@ -7,7 +7,7 @@ import { SUPPRESSION_TYPES } from "../types.js";
 
 export const suppressionRouter = Router();
 
-/** GET /api/suppression — list entries. */
+/** GET /api/suppression, list entries. */
 suppressionRouter.get(
   "/",
   asyncHandler(async (req, res) => {
@@ -25,7 +25,7 @@ suppressionRouter.get(
   }),
 );
 
-/** POST /api/suppression — add an entry (and retroactively archive matching leads). */
+/** POST /api/suppression, add an entry (and retroactively archive matching leads). */
 suppressionRouter.post(
   "/",
   validateBody(

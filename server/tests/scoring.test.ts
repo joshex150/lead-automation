@@ -11,7 +11,7 @@ const base = {
   strongVisualBrand: false,
 };
 
-describe("scoreLead — plan scoring table", () => {
+describe("scoreLead, plan scoring table", () => {
   it("no website = +40", () => {
     const r = scoreLead({ ...base, websiteType: "NO_WEBSITE" });
     expect(r.score).toBe(40);

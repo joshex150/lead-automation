@@ -33,9 +33,11 @@ export default function LeadDetailPage() {
   const [form, setForm] = useState({ email: "", instagramUsername: "", notes: "", instagramActive: false, strongVisualBrand: false });
 
   const load = useCallback(() => {
+    let cancelled = false;
     api
       .lead(id)
       .then(({ lead, history }) => {
+        if (cancelled) return;
         setLead(lead);
         setHistory(history);
         setForm({
@@ -46,7 +48,12 @@ export default function LeadDetailPage() {
           strongVisualBrand: lead.strongVisualBrand,
         });
       })
-      .catch((e: Error) => setError(e.message));
+      .catch((e: Error) => {
+        if (!cancelled) setError(e.message);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [id]);
 
   useEffect(load, [load]);
@@ -195,7 +202,7 @@ export default function LeadDetailPage() {
               <ul className="space-y-1 text-xs text-slate-400">
                 {lead.contactSources.map((s, i) => (
                   <li key={i}>
-                    {s.field}: {s.value} — from <b>{s.source}</b>
+                    {s.field}: {s.value}, from <b>{s.source}</b>
                     {s.sourceUrl ? ` (${shortUrl(s.sourceUrl)})` : ""}
                   </li>
                 ))}
@@ -235,7 +242,7 @@ export default function LeadDetailPage() {
                 onClick={() => {
                   const value = prompt("Deal value in ₦ (optional):");
                   const dealValue = value ? Number(value.replace(/[^\d.]/g, "")) : undefined;
-                  void act("Converted! 🎉", () => api.convert(id, dealValue));
+                  void act("Converted", () => api.convert(id, dealValue));
                 }}
               >
                 <RiTrophyLine className="h-4 w-4" /> Won the deal

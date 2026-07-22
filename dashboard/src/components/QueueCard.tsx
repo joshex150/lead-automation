@@ -51,7 +51,8 @@ export function QueueCard({ lead: initial, onDone }: { lead: Lead; onDone: (id: 
       await saveIfDirty();
       return api.approve(lead._id);
     }, (r) => {
-      if (r.draft) toast.success("Approved — Gmail draft created ✉️");
+      if (r.draft?.draftId) toast.success("Approved. Draft created in your Gmail.");
+      else if (r.draft?.internal) toast.success(`Approved. Ready to send via ${r.draft.provider}.`);
       else if (r.draftError) toast.success(`Approved. ${r.draftError}`);
       else toast.success("Approved");
       setLead(r.lead);
@@ -60,13 +61,13 @@ export function QueueCard({ lead: initial, onDone }: { lead: Lead; onDone: (id: 
 
   const sendNow = () =>
     run("send", () => api.send(lead._id), () => {
-      toast.success(`Sent to ${lead.email} 🚀`);
+      toast.success(`Sent to ${lead.email}`);
       onDone(lead._id);
     });
 
   const reject = () =>
     run("reject", () => api.reject(lead._id), () => {
-      toast("Rejected", { icon: "🗑️" });
+      toast.success("Rejected");
       onDone(lead._id);
     });
 
@@ -75,7 +76,7 @@ export function QueueCard({ lead: initial, onDone }: { lead: Lead; onDone: (id: 
       setLead(r.lead);
       setSubject(r.lead.pitchSubject ?? "");
       setMessage(r.lead.pitchMessage ?? "");
-      toast.success("New pitch generated ✨");
+      toast.success("New pitch generated");
     });
 
   const markContacted = () =>
@@ -86,7 +87,7 @@ export function QueueCard({ lead: initial, onDone }: { lead: Lead; onDone: (id: 
 
   function copyMessage() {
     navigator.clipboard.writeText(message).then(
-      () => toast.success("Message copied — paste it in the DM"),
+      () => toast.success("Message copied, paste it in the DM"),
       () => toast.error("Copy failed"),
     );
   }
@@ -113,9 +114,7 @@ export function QueueCard({ lead: initial, onDone }: { lead: Lead; onDone: (id: 
               <span className="inline-flex items-center gap-0.5">
                 <RiMapPin2Line /> {lead.city}
               </span>
-              {lead.openingSoon && (
-                <span className="font-semibold text-cta-500">✦ opening soon</span>
-              )}
+              {lead.openingSoon && <span className="font-semibold text-cta-500">opening soon</span>}
             </p>
           </div>
         </div>
@@ -215,7 +214,7 @@ export function QueueCard({ lead: initial, onDone }: { lead: Lead; onDone: (id: 
             {!isApproved && (
               <button onClick={approve} disabled={busy !== null} className="btn-primary">
                 <RiCheckLine className="h-4 w-4" />
-                {busy === "approve" ? "Approving…" : emailChannel ? "Approve → Gmail draft" : "Approve"}
+                {busy === "approve" ? "Approving…" : "Approve"}
               </button>
             )}
             {isApproved && emailChannel && (
@@ -246,7 +245,7 @@ export function QueueCard({ lead: initial, onDone }: { lead: Lead; onDone: (id: 
             <button onClick={reject} disabled={busy !== null} className="btn-ghost !text-rose-500 hover:!bg-rose-500/10">
               <RiCloseLine className="h-4 w-4" /> Reject
             </button>
-            {dirty && <span className="text-xs font-medium text-cta-500">edited — saved on approve</span>}
+            {dirty && <span className="text-xs font-medium text-cta-500">edited, saved on approve</span>}
           </div>
         </div>
       </div>

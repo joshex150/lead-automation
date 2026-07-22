@@ -8,6 +8,7 @@ import {
   extractDomain,
 } from "../../utils/url.js";
 import { logger } from "../../utils/logger.js";
+import { getCheckerRuntime } from "../../config/runtime.js";
 import { probeUrl, quickStatus } from "./probe.js";
 import { analyzeHtml } from "./analyze.js";
 import { classifyWebsite, collectQualityIssues } from "./classify.js";
@@ -70,10 +71,11 @@ export async function checkWebsite(
     return { check, classification: classifyWebsite(check) };
   }
 
-  // --- Full probe ---
+  // --- Full probe (timeout/redirect budget tunable from Settings) ---
   let probe;
   try {
-    probe = await probeUrl(url);
+    const checker = await getCheckerRuntime();
+    probe = await probeUrl(url, { timeoutMs: checker.timeoutMs, maxRedirects: checker.maxRedirects });
   } catch (err) {
     logger.warn({ url, err: String(err) }, "probe crashed");
     base.error = `PROBE_ERROR: ${err instanceof Error ? err.message : String(err)}`;
@@ -149,14 +151,14 @@ export async function checkWebsite(
       brokenInternalLinks: check.brokenInternalLinks,
     });
   } else if (check.reachable) {
-    // Live but not HTML (or body unreadable) — count basic issues only.
+    // Live but not HTML (or body unreadable), count basic issues only.
     check.issues = collectQualityIssues({
       sslValid: check.sslValid,
       finalUrl: check.finalUrl,
       responseTimeMs: check.responseTimeMs,
       title: null,
       metaDescription: null,
-      hasViewport: true, // unknown — don't penalize
+      hasViewport: true, // unknown, don't penalize
       brokenInternalLinks: 0,
     }).filter((i) => i !== "MISSING_TITLE" && i !== "MISSING_DESCRIPTION");
   }

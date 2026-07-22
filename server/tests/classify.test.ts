@@ -34,7 +34,7 @@ function baseCheck(overrides: Partial<WebsiteCheckResult> = {}): WebsiteCheckRes
   };
 }
 
-describe("classifyWebsite — the eight categories", () => {
+describe("classifyWebsite, the eight categories", () => {
   it("NO_WEBSITE when there is no URL", () => {
     const result = classifyWebsite(null);
     expect(result.websiteType).toBe("NO_WEBSITE");

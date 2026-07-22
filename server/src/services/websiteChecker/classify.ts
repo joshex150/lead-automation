@@ -6,21 +6,21 @@ import type { ClassificationResult, WebsiteCheckResult } from "../../types.js";
  * the AI pitch). No network, fully unit-testable.
  *
  * Priority order matters:
- *   1. NO_WEBSITE          — nothing to check
- *   2. SOCIAL_MEDIA_ONLY   — the "website" is (or redirects straight to) IG/FB/WhatsApp
- *   3. LINK_IN_BIO_ONLY    — Linktree / Beacons / etc.
- *   4. MENU_PLATFORM_ONLY  — LuluMenu / Chowdeck / Glovo store page
- *   5. BROKEN_WEBSITE      — dead by DNS/SSL/timeout/4xx/5xx/redirect loop/parking
- *   6. SHOPIFY             — live site with Shopify signatures
- *   7. POOR_WEBSITE        — live but with enough quality problems to pitch
- *   8. CUSTOM_WEBSITE      — live, healthy, custom (lowest priority target)
+ *   1. NO_WEBSITE         , nothing to check
+ *   2. SOCIAL_MEDIA_ONLY  , the "website" is (or redirects straight to) IG/FB/WhatsApp
+ *   3. LINK_IN_BIO_ONLY   , Linktree / Beacons / etc.
+ *   4. MENU_PLATFORM_ONLY , LuluMenu / Chowdeck / Glovo store page
+ *   5. BROKEN_WEBSITE     , dead by DNS/SSL/timeout/4xx/5xx/redirect loop/parking
+ *   6. SHOPIFY            , live site with Shopify signatures
+ *   7. POOR_WEBSITE       , live but with enough quality problems to pitch
+ *   8. CUSTOM_WEBSITE     , live, healthy, custom (lowest priority target)
  */
 export function classifyWebsite(check: WebsiteCheckResult | null): ClassificationResult {
   if (!check || !check.inputUrl) {
     return {
       websiteType: "NO_WEBSITE",
       websiteStatus: "NONE",
-      problemSummary: "The business has no website at all — customers can only find them through word of mouth or social media.",
+      problemSummary: "The business has no website at all, so customers can only find them through word of mouth or social media.",
     };
   }
 
@@ -30,7 +30,7 @@ export function classifyWebsite(check: WebsiteCheckResult | null): Classificatio
     return {
       websiteType: "SOCIAL_MEDIA_ONLY",
       websiteStatus: check.reachable ? "LIVE" : "DEGRADED",
-      problemSummary: `Their "website" is just a ${target} link — there is no real website, so they miss customers searching on Google and have no control over their online presence.`,
+      problemSummary: `Their "website" is just a ${target} link. There is no real website, so they miss customers searching on Google and have no control over their online presence.`,
     };
   }
 
@@ -38,7 +38,7 @@ export function classifyWebsite(check: WebsiteCheckResult | null): Classificatio
     return {
       websiteType: "LINK_IN_BIO_ONLY",
       websiteStatus: check.reachable ? "LIVE" : "DEGRADED",
-      problemSummary: `They only have a ${check.platform ?? "link-in-bio"} page instead of a real website — it looks temporary, can't rank on Google, and limits how professionally they can present their business.`,
+      problemSummary: `They only have a ${check.platform ?? "link-in-bio"} page instead of a real website. It looks temporary, can't rank on Google, and limits how professionally they can present their business.`,
     };
   }
 
@@ -46,7 +46,7 @@ export function classifyWebsite(check: WebsiteCheckResult | null): Classificatio
     return {
       websiteType: "MENU_PLATFORM_ONLY",
       websiteStatus: check.reachable ? "LIVE" : "DEGRADED",
-      problemSummary: `Their only web presence is a ${check.platform ?? "third-party menu"} listing — they depend entirely on a platform they don't control and pay commission on.`,
+      problemSummary: `Their only web presence is a ${check.platform ?? "third-party menu"} listing, so they depend on a platform they don't control and pay commission on.`,
     };
   }
 
@@ -65,7 +65,7 @@ export function classifyWebsite(check: WebsiteCheckResult | null): Classificatio
       websiteType: "SHOPIFY",
       websiteStatus: "LIVE",
       problemSummary:
-        "They run on a Shopify template — functional, but paying monthly fees for a generic storefront with limited customisation and no local payment/delivery flexibility.",
+        "They run on a Shopify template. It works, but they pay monthly fees for a generic storefront with limited customisation and little local payment or delivery flexibility.",
     };
   }
 
@@ -103,10 +103,10 @@ export function classifyWebsite(check: WebsiteCheckResult | null): Classificatio
 
 function deadWebsiteReason(check: WebsiteCheckResult): string | null {
   if (!check.dnsResolved) {
-    return "Their website domain no longer resolves (DNS failure) — the site customers expect to find is completely offline.";
+    return "Their website domain no longer resolves (DNS failure). The site customers expect to find is offline.";
   }
   if (check.error === "CONNECTION_TIMEOUT") {
-    return "Their website times out and never loads — visitors give up before seeing anything.";
+    return "Their website times out and never loads, so visitors give up before seeing anything.";
   }
   if (check.error === "SSL_FAILURE") {
     return "Their website's SSL certificate is broken, so browsers block visitors with a security warning.";
@@ -115,15 +115,15 @@ function deadWebsiteReason(check: WebsiteCheckResult): string | null {
     return "Their website is stuck in a redirect loop and never actually loads.";
   }
   if (check.isParkingPage) {
-    return "Their domain now shows a parking page — the website is gone and the domain may be expiring.";
+    return "Their domain now shows a parking page. The website is gone and the domain may be expiring.";
   }
   if (check.httpStatus != null) {
     // Access-control / rate-limit statuses mean the site is UP but blocking our
     // bot (very common on CDN-fronted sites). Treat as reachable-but-unknown, not
-    // dead — otherwise we'd manufacture false "broken website" leads.
+    // dead, otherwise we'd manufacture false "broken website" leads.
     if (ACCESS_CONTROLLED_STATUSES.has(check.httpStatus)) return null;
     if (check.httpStatus === 404 || check.httpStatus === 410) {
-      return `Their website returns a ${check.httpStatus} error — the page customers land on no longer exists.`;
+      return `Their website returns a ${check.httpStatus} error. The page customers land on no longer exists.`;
     }
     if (check.httpStatus >= 500) {
       return `Their website is failing with a ${check.httpStatus} server error.`;
@@ -133,7 +133,7 @@ function deadWebsiteReason(check: WebsiteCheckResult): string | null {
     }
   }
   if (!check.reachable) {
-    return "Their website cannot be reached — it appears to be offline.";
+    return "Their website cannot be reached. It appears to be offline.";
   }
   return null;
 }
@@ -141,7 +141,7 @@ function deadWebsiteReason(check: WebsiteCheckResult): string | null {
 /** 401/403/405/407/408/429/451: site is up but access-restricted or blocking bots. */
 const ACCESS_CONTROLLED_STATUSES = new Set([401, 403, 405, 407, 408, 429, 451]);
 
-/** Builds the issues list for a live page. Pure — unit-testable. */
+/** Builds the issues list for a live page. Pure, unit-testable. */
 export function collectQualityIssues(input: {
   sslValid: boolean;
   finalUrl: string | null;

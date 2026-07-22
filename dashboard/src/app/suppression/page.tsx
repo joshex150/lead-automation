@@ -15,10 +15,18 @@ export default function SuppressionPage() {
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(() => {
+    let cancelled = false;
     api
       .suppression()
-      .then((r) => setEntries(r.items))
-      .catch((e: Error) => toast.error(e.message));
+      .then((r) => {
+        if (!cancelled) setEntries(r.items);
+      })
+      .catch((e: Error) => {
+        if (!cancelled) toast.error(e.message);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(load, [load]);
@@ -30,7 +38,7 @@ export default function SuppressionPage() {
     try {
       const r = await api.addSuppression(form.type, form.value.trim(), form.reason.trim() || undefined);
       toast.success(
-        r.affectedLeads > 0 ? `Added — ${r.affectedLeads} existing lead(s) archived` : "Added to suppression list",
+        r.affectedLeads > 0 ? `Added, ${r.affectedLeads} existing lead(s) archived` : "Added to suppression list",
       );
       setForm({ ...form, value: "", reason: "" });
       load();
@@ -45,7 +53,7 @@ export default function SuppressionPage() {
     try {
       await api.deleteSuppression(id);
       setEntries((prev) => prev?.filter((e) => e._id !== id) ?? null);
-      toast("Removed", { icon: "🗑️" });
+      toast.success("Removed");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed");
     }
@@ -59,7 +67,7 @@ export default function SuppressionPage() {
           <span className="bg-gradient-to-r from-brand-600 to-purple-600 bg-clip-text text-transparent">list</span>
         </h1>
         <p className="mt-1 max-w-2xl text-sm leading-relaxed text-slate-500 dark:text-slate-400">
-          Anyone here is never contacted again — the NDPA right to object, honoured permanently. Adding an entry also
+          Anyone here is never contacted again, the NDPA right to object, honoured permanently. Adding an entry also
           archives every matching lead.
         </p>
       </motion.header>
@@ -117,7 +125,7 @@ export default function SuppressionPage() {
                   </span>
                 </td>
                 <td className="px-5 py-3 font-medium">{e.value}</td>
-                <td className="px-5 py-3 text-slate-500">{e.reason ?? "—"}</td>
+                <td className="px-5 py-3 text-slate-500">{e.reason ?? ", "}</td>
                 <td className="px-5 py-3 text-xs text-slate-400">{new Date(e.createdAt).toLocaleDateString()}</td>
                 <td className="px-5 py-3 text-right">
                   <button

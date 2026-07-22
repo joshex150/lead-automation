@@ -13,6 +13,7 @@ export default function QueuePage() {
   const [channel, setChannel] = useState<"ALL" | "EMAIL" | "INSTAGRAM_MANUAL">("ALL");
 
   const load = useCallback(() => {
+    let cancelled = false;
     api
       .leads({
         approvalStatus: "PENDING",
@@ -22,10 +23,16 @@ export default function QueuePage() {
         channel: channel === "ALL" ? undefined : channel,
       })
       .then((r) => {
+        if (cancelled) return;
         setLeads(r.items);
         setError(null);
       })
-      .catch((e: Error) => setError(e.message));
+      .catch((e: Error) => {
+        if (!cancelled) setError(e.message);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [channel]);
 
   useEffect(load, [load]);
@@ -41,7 +48,7 @@ export default function QueuePage() {
             <span className="bg-gradient-to-r from-brand-600 to-purple-600 bg-clip-text text-transparent">queue</span>
           </h1>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-            Review each pitch, tweak the words, approve — nothing is sent without you.
+            Review each pitch, tweak the words, approve, nothing is sent without you.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -81,7 +88,7 @@ export default function QueuePage() {
           className="glass-card mt-10 p-12 text-center"
         >
           <RiInboxUnarchiveLine className="mx-auto h-12 w-12 text-slate-300 dark:text-slate-600" />
-          <h2 className="mt-4 font-heading text-xl font-bold">Queue is clear 🎉</h2>
+          <h2 className="mt-4 font-heading text-xl font-bold">Queue is clear</h2>
           <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-slate-500">
             No pitches waiting for review. Run discovery from the overview page, or wait for the next scheduled run.
           </p>

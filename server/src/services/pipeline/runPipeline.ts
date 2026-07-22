@@ -9,7 +9,7 @@ import { generatePitch, pitchContextFromLead } from "../pitch/generatePitch.js";
 import { isSuppressed } from "../suppression.js";
 import { normalizeBusinessName } from "../../utils/text.js";
 import { mapWithConcurrency, sleep } from "../../utils/async.js";
-import { config, integrations } from "../../config/index.js";
+import { getCheckerRuntime, getPlacesKey } from "../../config/runtime.js";
 import { logger } from "../../utils/logger.js";
 import type { DiscoveredBusiness } from "../../types.js";
 
@@ -34,8 +34,9 @@ export async function discover(
   trigger: "CRON" | "MANUAL" | "API" = "MANUAL",
   override?: { cities?: string[]; categories?: string[] },
 ): Promise<DiscoverResult> {
-  if (!integrations.placesConfigured) {
-    throw new Error("GOOGLE_PLACES_API_KEY is not configured — discovery cannot run.");
+  const placesKey = await getPlacesKey();
+  if (!placesKey) {
+    throw new Error("Google Places API key is not configured (Settings → Discovery), discovery cannot run.");
   }
 
   const settings = await getSettings();
@@ -52,6 +53,7 @@ export async function discover(
       try {
         const businesses = await searchPlaces(q.query, q.city, q.category, {
           maxResults: settings.maxResultsPerQuery,
+          apiKey: placesKey,
         });
         stats.found = businesses.length;
 
@@ -233,29 +235,49 @@ export interface BatchProcessResult {
   errors: Array<{ lead: string; error: string }>;
 }
 
-/** Processes all leads still in DISCOVERED stage (or a supplied list). */
-export async function processPendingLeads(limit = 200): Promise<BatchProcessResult> {
-  const pending = await Lead.find({
-    pipelineStage: "DISCOVERED",
-    optedOut: { $ne: true },
-  })
-    .sort({ createdAt: 1 })
-    .limit(limit);
-
+/**
+ * Processes leads still in DISCOVERED stage, in batches, until none remain
+ * (continuity: work interrupted by a crash/restart is picked up here on the
+ * next run, because progress is stage-based and persisted per lead).
+ */
+export async function processPendingLeads(batchSize = 200, maxBatches = 50): Promise<BatchProcessResult> {
   const result: BatchProcessResult = { processed: 0, qualified: 0, disqualified: 0, errors: [] };
+  const checker = await getCheckerRuntime();
+  // Leads that threw stay in DISCOVERED (retried on the NEXT run); exclude
+  // them from later batches of THIS run so we never spin on a poison lead.
+  const failedIds: unknown[] = [];
 
-  const outcomes = await mapWithConcurrency(pending, config.CHECKER_CONCURRENCY, async (lead) => processLead(lead));
+  for (let batch = 0; batch < maxBatches; batch++) {
+    const pending = await Lead.find({
+      pipelineStage: "DISCOVERED",
+      optedOut: { $ne: true },
+      ...(failedIds.length ? { _id: { $nin: failedIds } } : {}),
+    })
+      .sort({ createdAt: 1 })
+      .limit(batchSize);
+    if (pending.length === 0) break;
 
-  outcomes.forEach((o, i) => {
-    if (o.ok) {
-      result.processed++;
-      if (o.value.qualified) result.qualified++;
-      else result.disqualified++;
-    } else {
-      result.errors.push({ lead: pending[i]?.businessName ?? "unknown", error: o.error.message });
-      logger.error({ lead: pending[i]?.businessName, err: o.error.message }, "lead processing failed");
-    }
-  });
+    const outcomes = await mapWithConcurrency(pending, checker.concurrency, async (lead) => processLead(lead));
+
+    let failedWholeBatch = true;
+    outcomes.forEach((o, i) => {
+      if (o.ok) {
+        failedWholeBatch = false;
+        result.processed++;
+        if (o.value.qualified) result.qualified++;
+        else result.disqualified++;
+      } else {
+        failedIds.push(pending[i]?._id);
+        result.errors.push({ lead: pending[i]?.businessName ?? "unknown", error: o.error.message });
+        logger.error({ lead: pending[i]?.businessName, err: o.error.message }, "lead processing failed");
+      }
+    });
+
+    // A lead whose processing throws stays in DISCOVERED; if literally every
+    // lead in a batch failed (DB down, etc.), stop instead of spinning.
+    if (failedWholeBatch) break;
+    if (pending.length < batchSize) break;
+  }
 
   logger.info(result, "batch processing complete");
   return result;

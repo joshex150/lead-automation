@@ -25,7 +25,7 @@ export function normalizeNigerianPhone(raw: string | null | undefined): string |
     digits = digits.slice(1);
   }
 
-  // A valid NG national significant number is 10 digits (mobile) — landlines
+  // A valid NG national significant number is 10 digits (mobile), landlines
   // vary but mobile is what matters for WhatsApp.
   if (digits.length !== 10) return null;
   if (!/^\d{10}$/.test(digits)) return null;

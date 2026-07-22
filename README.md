@@ -8,10 +8,10 @@ Google Places API ──► Website Health Checker ──► Enrichment ──�
       Gmail draft ◄── Approval Dashboard ◄── AI Pitch  ◄── qualified (score ≥ 50)
           │
           ▼
-   You click Send ──► CRM tracking ──► one polite follow-up ──► Interested? → 💰
+   You click Send ──► CRM tracking ──► one polite follow-up ──► Interested? → won deal
 ```
 
-**Stack:** Node.js + Express + TypeScript · **MongoDB** (Mongoose) · Next.js dashboard · Google Places API (New) · OpenAI **or** Anthropic pitches · Gmail API · deployable on **Railway** in minutes.
+Stack: Node.js, Express and TypeScript on the server, MongoDB via Mongoose, a Next.js dashboard, Google Places API (New) for discovery, your choice of OpenAI, Anthropic, NVIDIA or any OpenAI-compatible model for pitches, and Gmail, Zoho or Resend for email. Provider keys and most settings live in the database and are edited from the dashboard, so there is little to no `.env` to manage. Deploys to Railway.
 
 ---
 
@@ -24,8 +24,8 @@ Google Places API ──► Website Health Checker ──► Enrichment ──�
 | 3. Classify | `NO_WEBSITE` `BROKEN_WEBSITE` `SHOPIFY` `LINK_IN_BIO_ONLY` `MENU_PLATFORM_ONLY` `SOCIAL_MEDIA_ONLY` `CUSTOM_WEBSITE` `POOR_WEBSITE` | `classify.ts` |
 | 4. Enrich | Email, WhatsApp, Instagram scraped from the business's **own public pages**, with provenance recorded for every value | `server/src/services/enrichment` |
 | 5. Score | Configurable weights (no website +40, broken +40, social-only +30, opening soon +25 …). Score ≥ threshold → approval queue | `server/src/services/scoring` |
-| 6. Pitch | AI writes a specific, warm, 70–120-word pitch from the business's actual situation. Falls back to smart templates if no AI key | `server/src/services/pitch` |
-| 7. Approve | Dashboard queue: edit the pitch → **Approve** creates a Gmail draft → **Send** dispatches it. Instagram leads get an *open profile + copy message* manual flow | `dashboard/` |
+| 6. Pitch | AI writes a specific, warm, 70-120-word pitch from the business's actual situation, in a plain house style (no em dashes, no hype). Falls back to templates if no AI key | `server/src/services/pitch` |
+| 7. Approve | Dashboard queue: edit the pitch, Approve creates a draft (Gmail) or readies it to send (Zoho/Resend), Send dispatches it. Instagram leads get an open-profile plus copy-message manual flow | `dashboard/` |
 | 8. Follow up | Exactly **one** follow-up after N days, only if no response. Daily email cap. Full audit log | `server/src/services/outreach` |
 | 9. Win | Record replies, mark **Interested** → **Converted** with deal value. Revenue shows on the overview | CRM routes |
 
@@ -72,17 +72,19 @@ Full walkthrough: **[docs/RAILWAY_DEPLOY.md](docs/RAILWAY_DEPLOY.md)**. Short ve
 
 ## Configuration
 
-Everything is environment-driven — see [`.env.example`](.env.example). Key vars:
+Most config lives in the database and is edited from the dashboard Settings page: the Google Places key, the AI provider and key, the email provider and credentials, scheduler crons, guardrails, and scoring weights. Secrets come back masked, and changes apply live with no redeploy. The `.env` file (see [`.env.example`](.env.example)) is a fallback and only `MONGODB_URI`, `PORT`, `API_KEY`, and `DASHBOARD_ORIGIN` really need to be there.
 
-| Variable | Purpose |
+Provider options you can set from the dashboard:
+
+| Setting | Options |
 |---|---|
-| `MONGODB_URI` | MongoDB connection string |
-| `API_KEY` | Shared secret for the API (dashboard sends it as `x-api-key`) |
-| `GOOGLE_PLACES_API_KEY` | Places API (New) — discovery |
-| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | AI pitches (auto-detected; template fallback if neither) |
-| `GMAIL_CLIENT_ID/SECRET/REFRESH_TOKEN/SENDER` | Gmail drafts + sending ([setup guide](docs/SETUP.md)) |
-| `DISCOVERY_CRON` / `FOLLOWUP_CRON` / `TIMEZONE` | Built-in scheduler (default 07:00 / 09:00 Africa/Lagos) |
-| `SCORE_THRESHOLD`, `DAILY_EMAIL_CAP`, `FOLLOW_UP_DAYS`, `MAX_CONTACT_ATTEMPTS` | Guardrails (also editable live in dashboard Settings) |
+| AI pitch writer | OpenAI, Anthropic, NVIDIA NIM, or any OpenAI-compatible endpoint (Groq, Together, Ollama, vLLM). Template fallback when off. |
+| Email sending | Gmail (real drafts), Zoho or any SMTP mailbox, Resend. |
+| Discovery | Google Places API key, target cities and categories, results per query. |
+| Scheduler | Discovery and follow-up crons, timezone, on/off. Applies live. |
+| Guardrails | Score threshold, daily email cap, follow-up delay, max contact attempts, scoring weights. |
+
+Each provider section has a Test button that round-trips a real request so you know it works before the first run.
 
 ## API surface
 
@@ -119,21 +121,22 @@ GET  /api/stats                       funnel, revenue, integrations
 - **Provenance**: every email/phone/Instagram handle stores *where* it came from and *when*.
 - **Suppression list**: opt-outs suppress email + phone + domain + Instagram + Place ID permanently; new discoveries matching the list are never even stored.
 - **One follow-up max**, never after any reply; `MAX_CONTACT_ATTEMPTS` hard cap.
-- **Opt-out line in every email** ("reply 'unsubscribe'") — honouring Nigeria's NDPA right to object.
+- **Opt-out line in every email** ("reply 'unsubscribe'"), honouring Nigeria's NDPA right to object.
 - **Business contacts only**, from public business listings and the business's own website.
 - Details: [docs/COMPLIANCE.md](docs/COMPLIANCE.md).
 
 ## Testing
 
 ```bash
-npm test --workspace server        # 140+ unit tests (classifier, scoring, extraction, phone, email, places)
-                                   # + full API integration suite (in-memory / real MongoDB)
+npm test --workspace server        # ~200 tests: classifier, scoring, extraction, phone, email/AI
+                                   # providers, runtime-config resolution and secret masking,
+                                   # plus a full API integration suite (in-memory or real MongoDB)
 ```
 
 ## Docs
 
-- [docs/SETUP.md](docs/SETUP.md) — Google Places, Gmail OAuth refresh token, AI keys
-- [docs/RAILWAY_DEPLOY.md](docs/RAILWAY_DEPLOY.md) — step-by-step Railway deployment
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the pipeline fits together
-- [docs/COMPLIANCE.md](docs/COMPLIANCE.md) — NDPA controls and outreach policy
-- [n8n/README.md](n8n/README.md) — optional n8n orchestration
+- [docs/SETUP.md](docs/SETUP.md), Google Places, Gmail OAuth refresh token, AI keys
+- [docs/RAILWAY_DEPLOY.md](docs/RAILWAY_DEPLOY.md), step-by-step Railway deployment
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), how the pipeline fits together
+- [docs/COMPLIANCE.md](docs/COMPLIANCE.md), NDPA controls and outreach policy
+- [n8n/README.md](n8n/README.md), optional n8n orchestration

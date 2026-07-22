@@ -1,7 +1,7 @@
 import * as cheerio from "cheerio";
 
 /**
- * Pure HTML/header analysis — no network. Everything here is unit-testable.
+ * Pure HTML/header analysis, no network. Everything here is unit-testable.
  */
 
 export interface PageAnalysis {

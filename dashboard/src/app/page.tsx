@@ -15,6 +15,7 @@ import {
   RiCloseCircleFill,
 } from "react-icons/ri";
 import { api } from "@/lib/api";
+import { useCountUp, useTilt, useVisiblePolling } from "@/lib/motion";
 import type { Stats } from "@/lib/types";
 
 export default function OverviewPage() {
@@ -23,27 +24,34 @@ export default function OverviewPage() {
   const [running, setRunning] = useState(false);
 
   const load = useCallback(() => {
+    let cancelled = false;
     api
       .stats()
       .then((s) => {
+        if (cancelled) return;
         setStats(s);
         setError(null);
       })
-      .catch((e: Error) => setError(e.message));
+      .catch((e: Error) => {
+        if (!cancelled) setError(e.message);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
-    load();
-    const t = setInterval(load, 30000);
-    return () => clearInterval(t);
+    const cancel = load();
+    return cancel;
   }, [load]);
+  useVisiblePolling(load, 30000);
 
   async function runPipeline() {
     setRunning(true);
-    const id = toast.loading("Running discovery pipeline… this can take a few minutes");
+    const id = toast.loading("Running the discovery pipeline. This can take a few minutes.");
     try {
       const r = await api.runFull();
-      toast.success(`Done! Found ${r.found}, created ${r.created}, qualified ${r.qualified}.`, { id, duration: 8000 });
+      toast.success(`Done. Found ${r.found}, created ${r.created}, qualified ${r.qualified}.`, { id, duration: 8000 });
       load();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Pipeline failed", { id });
@@ -73,6 +81,15 @@ export default function OverviewPage() {
     ["Interested", stats.totals.interested],
     ["Converted", stats.totals.converted],
   ];
+
+  const emailLabel =
+    stats.integrations.emailProvider && stats.integrations.emailProvider !== "none"
+      ? `Email sending (${stats.integrations.emailProvider})`
+      : "Email sending";
+  const aiLabel =
+    stats.integrations.aiProvider && stats.integrations.aiProvider !== "none"
+      ? `AI pitch writer (${stats.integrations.aiProvider})`
+      : "AI pitch writer";
 
   return (
     <div className="mx-auto max-w-6xl">
@@ -127,7 +144,8 @@ export default function OverviewPage() {
         <StatCard
           icon={<RiTrophyLine />}
           label="Revenue won"
-          value={`₦${stats.revenue.totalDealValue.toLocaleString()}`}
+          value={stats.revenue.totalDealValue}
+          prefix="₦"
           sub={`${stats.revenue.convertedDeals} deal${stats.revenue.convertedDeals === 1 ? "" : "s"}`}
           accent="from-cta-500 to-amber-500"
           delay={0.15}
@@ -140,7 +158,7 @@ export default function OverviewPage() {
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.1 }}
-          className="glass-card p-6 lg:col-span-3"
+          className="glass-card min-h-[26rem] p-6 lg:col-span-3"
         >
           <h2 className="font-heading text-lg font-bold">Pipeline funnel</h2>
           <div className="mt-5 space-y-3">
@@ -150,7 +168,7 @@ export default function OverviewPage() {
                 <div key={label}>
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-slate-600 dark:text-slate-300">{label}</span>
-                    <span className="font-heading font-bold">{value}</span>
+                    <span className="font-heading font-bold tabular-nums">{value}</span>
                   </div>
                   <div className="mt-1 h-2.5 overflow-hidden rounded-full bg-slate-200/70 dark:bg-slate-800">
                     <motion.div
@@ -183,7 +201,7 @@ export default function OverviewPage() {
           </div>
         </motion.section>
 
-        {/* Right column: integrations + runs + activity */}
+        {/* Right column: integrations + runs */}
         <motion.section
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
@@ -194,10 +212,16 @@ export default function OverviewPage() {
             <h2 className="font-heading text-lg font-bold">Integrations</h2>
             <ul className="mt-4 space-y-2.5 text-sm">
               <IntegrationRow ok={stats.integrations.googlePlaces} label="Google Places API" />
-              <IntegrationRow ok={stats.integrations.ai} label="AI pitch generation" />
-              <IntegrationRow ok={stats.integrations.gmail} label="Gmail drafts & sending" />
+              <IntegrationRow ok={stats.integrations.ai} label={aiLabel} />
+              <IntegrationRow ok={stats.integrations.email} label={emailLabel} />
               <IntegrationRow ok={stats.integrations.authEnabled} label="API authentication" />
             </ul>
+            <Link
+              href="/settings"
+              className="mt-4 inline-block text-xs font-semibold text-brand-600 hover:underline dark:text-brand-500"
+            >
+              Configure providers in settings
+            </Link>
           </div>
 
           <div className="glass-card p-6">
@@ -211,7 +235,7 @@ export default function OverviewPage() {
                   <span className="text-slate-500 dark:text-slate-400">
                     {new Date(r.startedAt).toLocaleString("en-NG", { dateStyle: "medium", timeStyle: "short" })}
                   </span>
-                  <span className="font-medium">
+                  <span className="font-medium tabular-nums">
                     {r.status === "COMPLETED" ? (
                       <>
                         +{r.totals.created} new · {r.totals.qualified} qualified
@@ -234,6 +258,7 @@ function StatCard({
   icon,
   label,
   value,
+  prefix = "",
   sub,
   href,
   accent,
@@ -241,28 +266,35 @@ function StatCard({
 }: {
   icon: React.ReactNode;
   label: string;
-  value: number | string;
+  value: number;
+  prefix?: string;
   sub?: string;
   href?: string;
   accent: string;
   delay: number;
 }) {
+  const tiltRef = useTilt<HTMLDivElement>(6);
+  const countRef = useCountUp(value, (n) => `${prefix}${Math.round(n).toLocaleString()}`);
+
   const card = (
     <motion.div
       initial={{ opacity: 0, y: 16, scale: 0.97 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
       transition={{ delay }}
-      whileHover={{ y: -4 }}
-      className="glass-card group h-full p-5"
+      className="h-full"
     >
-      <span
-        className={`inline-flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br text-lg text-white shadow-lg ${accent}`}
-      >
-        {icon}
-      </span>
-      <p className="mt-4 font-heading text-2xl font-extrabold tracking-tight sm:text-3xl">{value}</p>
-      <p className="mt-0.5 text-xs font-medium uppercase tracking-wider text-slate-400">{label}</p>
-      {sub && <p className="mt-1 text-xs text-slate-500">{sub}</p>}
+      <div ref={tiltRef} className="glass-card group flex h-full min-h-[9rem] flex-col p-5">
+        <span
+          className={`inline-flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br text-lg text-white shadow-lg ${accent}`}
+        >
+          {icon}
+        </span>
+        <p className="mt-4 font-heading text-2xl font-extrabold tracking-tight tabular-nums sm:text-3xl">
+          <span ref={countRef}>{prefix}0</span>
+        </p>
+        <p className="mt-0.5 text-xs font-medium uppercase tracking-wider text-slate-400">{label}</p>
+        {sub && <p className="mt-1 text-xs text-slate-500">{sub}</p>}
+      </div>
     </motion.div>
   );
   return href ? <Link href={href}>{card}</Link> : card;
@@ -285,13 +317,13 @@ function IntegrationRow({ ok, label }: { ok: boolean; label: string }) {
 function PageSkeleton() {
   return (
     <div className="mx-auto max-w-6xl animate-pulse">
-      <div className="h-10 w-72 rounded-xl bg-slate-200 dark:bg-slate-800" />
+      <div className="h-10 w-72 max-w-full rounded-xl bg-slate-200 dark:bg-slate-800" />
       <div className="mt-8 grid grid-cols-2 gap-4 lg:grid-cols-4">
         {[...Array(4)].map((_, i) => (
-          <div key={i} className="h-36 rounded-2xl bg-slate-200 dark:bg-slate-800" />
+          <div key={i} className="min-h-[9rem] rounded-2xl bg-slate-200 dark:bg-slate-800" />
         ))}
       </div>
-      <div className="mt-8 h-96 rounded-2xl bg-slate-200 dark:bg-slate-800" />
+      <div className="mt-8 min-h-[26rem] rounded-2xl bg-slate-200 dark:bg-slate-800" />
     </div>
   );
 }

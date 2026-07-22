@@ -4,12 +4,12 @@ import { analyzeHtml } from "../src/services/websiteChecker/analyze.js";
 describe("analyzeHtml", () => {
   it("extracts title, description and viewport", () => {
     const html = `<html><head>
-      <title>Crystal Scents — Luxury Perfumes</title>
+      <title>Crystal Scents, Luxury Perfumes</title>
       <meta name="description" content="Luxury perfumes in Port Harcourt">
       <meta name="viewport" content="width=device-width, initial-scale=1">
     </head><body>Hello</body></html>`;
     const page = analyzeHtml(html, "https://crystalscents.ng/");
-    expect(page.title).toBe("Crystal Scents — Luxury Perfumes");
+    expect(page.title).toBe("Crystal Scents, Luxury Perfumes");
     expect(page.metaDescription).toBe("Luxury perfumes in Port Harcourt");
     expect(page.hasViewport).toBe(true);
     expect(page.isShopify).toBe(false);

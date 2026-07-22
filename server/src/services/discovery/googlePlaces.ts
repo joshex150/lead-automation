@@ -4,7 +4,7 @@ import { sleep, withRetry } from "../../utils/async.js";
 import type { DiscoveredBusiness } from "../../types.js";
 
 /**
- * Google Places API (New) — Text Search.
+ * Google Places API (New), Text Search.
  * https://developers.google.com/maps/documentation/places/web-service/text-search
  *
  * We use searchText with a field mask limited to what we actually store,
@@ -72,7 +72,7 @@ export async function searchPlaces(
 ): Promise<DiscoveredBusiness[]> {
   const apiKey = opts.apiKey ?? config.GOOGLE_PLACES_API_KEY;
   if (!apiKey) {
-    throw new Error("GOOGLE_PLACES_API_KEY is not configured — cannot run discovery.");
+    throw new Error("GOOGLE_PLACES_API_KEY is not configured, cannot run discovery.");
   }
   const fetchImpl = opts.fetchImpl ?? fetch;
   const maxResults = Math.min(opts.maxResults ?? 60, 60);

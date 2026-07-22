@@ -1,9 +1,8 @@
 import { Lead, type LeadDocument } from "../../models/Lead.js";
 import { OutreachLog } from "../../models/OutreachLog.js";
 import { getSettings } from "../../models/Settings.js";
-import { integrations } from "../../config/index.js";
 import { logger } from "../../utils/logger.js";
-import { emailsSentToday, sendEmail } from "./gmail.js";
+import { emailsSentToday, getActiveEmail, sendEmail } from "./email/index.js";
 
 /**
  * Follow-up engine. Policy (compliance-driven):
@@ -13,14 +12,14 @@ import { emailsSentToday, sendEmail } from "./gmail.js";
  */
 
 export function buildFollowUpMessage(lead: LeadDocument): { subject: string; body: string } {
-  const subject = `Re: ${lead.pitchSubject ?? `Your online presence — ${lead.businessName}`}`;
+  const subject = `Re: ${lead.pitchSubject ?? `Your online presence, ${lead.businessName}`}`;
   const body = `Hello ${lead.businessName},
 
-Just a gentle nudge on my earlier note — I know inboxes get busy.
+Just a gentle nudge on my earlier note. I know inboxes get busy.
 
 If improving your online presence is on your radar this season, we'd love to show you what a custom website could look like for ${lead.businessName}. No pressure at all; a one-line reply is enough.
 
-If now isn't the right time, that's completely fine — this is the last you'll hear from us unless you reach out.
+If now isn't the right time, that's completely fine. This is the last you'll hear from us unless you reach out.
 
 Warm regards,
 The YEAN Technologies team`;
@@ -52,8 +51,9 @@ export async function runFollowUps(now = new Date()): Promise<FollowUpRunResult>
   result.eligible = candidates.length;
   if (candidates.length === 0) return result;
 
-  if (!integrations.gmailConfigured) {
-    logger.warn("Follow-ups due but Gmail is not configured — skipping");
+  const { provider } = await getActiveEmail();
+  if (!provider) {
+    logger.warn("Follow-ups due but no email provider is configured, skipping");
     result.skipped = candidates.length;
     return result;
   }
@@ -87,7 +87,7 @@ export async function runFollowUps(now = new Date()): Promise<FollowUpRunResult>
         action: "FOLLOW_UP_SENT",
         subject,
         message: body,
-        meta: { messageId: send.messageId, threadId: send.threadId },
+        meta: { messageId: send.messageId, threadId: send.threadId, provider: send.provider },
       });
 
       sentToday++;

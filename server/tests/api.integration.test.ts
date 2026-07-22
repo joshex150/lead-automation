@@ -37,7 +37,7 @@ beforeAll(async () => {
     dbAvailable = false;
     // eslint-disable-next-line no-console
     console.warn(
-      "\n[integration] No MongoDB available — skipping integration suite.\n" +
+      "\n[integration] No MongoDB available, skipping integration suite.\n" +
         "Set TEST_MONGODB_URI to a MongoDB-compatible server to run it.\n" +
         `Reason: ${err instanceof Error ? err.message : String(err)}\n`,
     );
@@ -71,6 +71,20 @@ describe("health & auth", () => {
     const res = await request(app).get("/health");
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
+    expect(res.body.db).toBe("connected");
+  });
+
+  it("malformed JSON body returns 400, not 500", async () => {
+    const res = await request(app)
+      .put("/api/settings")
+      .set("Content-Type", "application/json")
+      .send('{"cities": [oops');
+    expect(res.status).toBe(400);
+  });
+
+  it("unknown route returns 404", async () => {
+    const res = await request(app).get("/api/does-not-exist");
+    expect(res.status).toBe(404);
   });
 
   it("enforces x-api-key when API_KEY is configured", async () => {
@@ -179,7 +193,7 @@ describe("lead lifecycle", () => {
     expect(res.body.lead.approval.status).toBe("APPROVED");
     expect(res.body.lead.pipelineStage).toBe("APPROVED");
     expect(res.body.draft).toBeNull();
-    expect(res.body.draftError).toMatch(/not configured/i);
+    expect(res.body.draftError).toMatch(/no email provider configured/i);
 
     const log = await OutreachLog.findOne({ leadId: lead._id, action: "APPROVED" });
     expect(log).toBeTruthy();
@@ -397,6 +411,153 @@ describe("pipeline safety", () => {
   it("discovery without a Places key returns 503, not a crash", async () => {
     const res = await request(app).post("/api/pipeline/discover").send({});
     expect(res.status).toBe(503);
-    expect(res.body.error).toMatch(/GOOGLE_PLACES_API_KEY/);
+    expect(res.body.error).toMatch(/Places API key/i);
+  });
+});
+
+describe("settings: DB-backed config + secret masking", () => {
+  it("stores provider credentials and returns them masked", async () => {
+    const put = await request(app)
+      .put("/api/settings")
+      .send({
+        integrations: {
+          googlePlacesApiKey: "AIzaSECRETPLACES99",
+          ai: { provider: "OPENAI", apiKey: "sk-supersecret1234", model: "gpt-4o" },
+          email: {
+            provider: "RESEND",
+            fromAddress: "hello@yean.tech",
+            resend: { apiKey: "re_secretkeyABCD" },
+          },
+        },
+      });
+    expect(put.status).toBe(200);
+    // Response is masked, never the raw secret.
+    expect(put.body.settings.integrations.ai.apiKey).toBe("••••1234");
+    expect(put.body.settings.integrations.googlePlacesApiKey).toBe("••••ES99");
+    expect(put.body.settings.integrations.email.resend.apiKey).toBe("••••ABCD");
+    expect(put.body.settings.integrations.ai.model).toBe("gpt-4o");
+
+    // GET is masked too.
+    const get = await request(app).get("/api/settings");
+    expect(get.body.settings.integrations.ai.apiKey).toBe("••••1234");
+  });
+
+  it("re-saving with masked placeholders preserves the stored secret", async () => {
+    // Read masked, send it straight back with an unrelated edit.
+    const get = await request(app).get("/api/settings");
+    const masked = get.body.settings.integrations;
+    const put = await request(app)
+      .put("/api/settings")
+      .send({ integrations: { ai: { apiKey: masked.ai.apiKey, model: "gpt-4o-mini" } } });
+    expect(put.status).toBe(200);
+    expect(put.body.settings.integrations.ai.model).toBe("gpt-4o-mini");
+
+    // The real key survived: the resolved runtime still sees it.
+    const status = await request(app).get("/api/settings/integrations");
+    expect(status.body.ai.configured).toBe(true);
+    expect(status.body.ai.provider).toBe("openai");
+  });
+
+  it("integration status reflects configured providers without leaking secrets", async () => {
+    const res = await request(app).get("/api/settings/integrations");
+    expect(res.status).toBe(200);
+    expect(res.body.googlePlaces.configured).toBe(true);
+    expect(res.body.email.provider).toBe("resend");
+    expect(JSON.stringify(res.body)).not.toContain("secret");
+  });
+
+  it("rejects an invalid AI base URL", async () => {
+    const res = await request(app)
+      .put("/api/settings")
+      .send({ integrations: { ai: { baseUrl: "not-a-url" } } });
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects an invalid cron expression", async () => {
+    const res = await request(app)
+      .put("/api/settings")
+      .send({ integrations: { scheduler: { discoveryCron: "not a cron" } } });
+    expect(res.status).toBe(400);
+  });
+
+  it("accepts a valid cron expression", async () => {
+    const res = await request(app)
+      .put("/api/settings")
+      .send({ integrations: { scheduler: { discoveryCron: "*/30 * * * *" } } });
+    expect(res.status).toBe(200);
+  });
+
+  it("test endpoints answer without throwing when providers are unreachable", async () => {
+    // Points AI at a dead custom endpoint so the call fails fast but the
+    // route still returns a structured { ok:false } instead of a 500.
+    await request(app)
+      .put("/api/settings")
+      .send({
+        integrations: {
+          ai: { provider: "CUSTOM", apiKey: "k", model: "x", baseUrl: "http://127.0.0.1:9/v1" },
+        },
+      });
+    const ai = await request(app).post("/api/settings/test-ai").send({});
+    expect(ai.status).toBe(200);
+    expect(ai.body.ok).toBe(false);
+  });
+});
+
+describe("email provider send flow (mocked provider)", () => {
+  it("approves and sends through the active provider, respecting the send lifecycle", async () => {
+    const { _setEmailProviderForTests } = await import("../src/services/outreach/email/index.js");
+    const sent: Array<{ to: string }> = [];
+    const fakeProvider = {
+      name: "resend" as const,
+      supportsDrafts: false,
+      send: async (m: { to: string }) => {
+        sent.push(m);
+        return { messageId: "mock-1", threadId: "mock-1" };
+      },
+      verify: async () => undefined,
+    };
+    const fakeRuntime = {
+      provider: "resend" as const,
+      configured: true,
+      supportsDrafts: false,
+      fromAddress: "hello@yean.tech",
+      fromName: "YEAN",
+      gmail: { clientId: "", clientSecret: "", refreshToken: "" },
+      zoho: { host: "smtp.zoho.com", port: 465, secure: true, user: "", password: "" },
+      resend: { apiKey: "re_x" },
+      source: "db" as const,
+    };
+    _setEmailProviderForTests(fakeProvider, fakeRuntime);
+    try {
+      // Construct a ready-to-approve EMAIL lead directly, so this test targets
+      // the approve/send lifecycle rather than scoring/enrichment.
+      const lead = await makeLead({
+        businessName: "Send Flow",
+        businessNameNormalized: "send flow",
+        email: "owner@sendflow.ng",
+        websiteType: "NO_WEBSITE",
+        leadScore: 65,
+        outreachChannel: "EMAIL",
+        pipelineStage: "PENDING_APPROVAL",
+        pitchSubject: "A website for Send Flow",
+        pitchMessage: "Hello Send Flow, we'd love to build you a website.",
+        approval: { status: "PENDING" },
+      });
+
+      const approve = await request(app).post(`/api/leads/${lead._id}/approve`).send({});
+      expect(approve.status).toBe(200);
+      expect(approve.body.lead.approval.status).toBe("APPROVED");
+      // Draft-less provider records an internal draft.
+      expect(approve.body.draft.internal).toBe(true);
+
+      const send = await request(app).post(`/api/leads/${lead._id}/send`).send({});
+      expect(send.status).toBe(200);
+      expect(send.body.lead.outreachStatus).toBe("CONTACTED");
+      expect(send.body.lead.followUpAt).toBeTruthy();
+      expect(sent).toHaveLength(1);
+      expect(sent[0].to).toBe("owner@sendflow.ng");
+    } finally {
+      _setEmailProviderForTests(null);
+    }
   });
 });

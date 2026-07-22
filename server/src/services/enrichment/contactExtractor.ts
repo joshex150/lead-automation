@@ -6,7 +6,7 @@ import type { ExtractedContacts } from "../../types.js";
 
 /**
  * Extracts publicly presented business contact information from a page.
- * Pure function over HTML — unit-testable, no network.
+ * Pure function over HTML, unit-testable, no network.
  *
  * Compliance note: we only collect contact details the business itself
  * publishes on its own public pages, and we record the exact source URL

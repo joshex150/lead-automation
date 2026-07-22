@@ -1,6 +1,13 @@
-# Setup Guide — API keys & credentials
+# Setup guide, API keys and credentials
 
-Everything degrades gracefully: the server boots and the pipeline runs with **no keys at all** (using template pitches and skipping discovery/email). Add each integration when you're ready.
+Everything degrades gracefully: the server boots and the pipeline runs with no keys at all (template pitches, discovery and email skipped). Add each integration when you're ready.
+
+You have two places to put credentials, and you can mix them:
+
+1. The dashboard Settings page (recommended). Values are stored in MongoDB, secrets come back masked, and changes apply live without a redeploy.
+2. Environment variables (below), which act as the fallback.
+
+The dashboard value wins over the env value for the same setting.
 
 ---
 
@@ -12,7 +19,7 @@ Any MongoDB works. Options:
 - **MongoDB Atlas (free tier):** create a cluster → *Connect → Drivers* → copy the SRV URI into `MONGODB_URI`. Whitelist `0.0.0.0/0` (or Railway's egress) under Network Access.
 - **Railway MongoDB plugin:** reference it as `${{MongoDB.MONGO_URL}}` (see RAILWAY_DEPLOY.md).
 
-## 2. Google Places API (New) — discovery
+## 2. Google Places API (New), discovery
 
 1. [Google Cloud Console](https://console.cloud.google.com/) → create/select a project.
 2. **APIs & Services → Library →** enable **"Places API (New)"** (not the legacy one).
@@ -24,16 +31,32 @@ Any MongoDB works. Options:
 > run makes `cities × categories` requests (× up to 3 pages). With 3 cities and 7
 > categories that's ≤63 requests/day. Keep `maxResultsPerQuery` modest to control cost.
 
-## 3. AI pitch generation (optional but recommended)
+## 3. AI pitch writer (optional but recommended)
 
-Set **either**:
+Choose a provider in the dashboard (Settings, AI) or via env. Supported:
 
-- `OPENAI_API_KEY` — from <https://platform.openai.com/api-keys> (default model `gpt-4o-mini`)
-- `ANTHROPIC_API_KEY` — from <https://console.anthropic.com/> (default model `claude-haiku-4-5-20251001`)
+| Provider | Where to get a key | Default model | Notes |
+|---|---|---|---|
+| OpenAI | <https://platform.openai.com/api-keys> | gpt-4o-mini | |
+| Anthropic | <https://console.anthropic.com/> | claude-haiku-4-5-20251001 | |
+| NVIDIA NIM | <https://build.nvidia.com/> | meta/llama-3.3-70b-instruct | OpenAI-compatible |
+| Custom endpoint | your server | you set it | Any OpenAI-compatible API: Groq, Together, Ollama, vLLM. Set the base URL and model. |
 
-Auto-detected. Force one with `PITCH_PROVIDER=openai|anthropic`. Override the model with `PITCH_MODEL`. With neither key set, the system uses high-quality deterministic **template** pitches so nothing breaks.
+In the dashboard, pick the provider, paste the key, optionally set a model and base URL, then click Test AI. The base URL for a custom endpoint looks like `https://api.groq.com/openai/v1` or `http://localhost:11434/v1` for a local Ollama (no key needed).
 
-## 4. Gmail — drafts & sending (optional)
+Via env, set `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `NVIDIA_API_KEY` and leave the dashboard provider on Auto. Whatever a model writes is normalised to the house writing style (no em dashes, straight quotes). With no provider set, the system uses deterministic template pitches so nothing breaks.
+
+## 4. Email sending (optional)
+
+Choose a provider in the dashboard (Settings, Email) or via env.
+
+- Gmail. OAuth2, described below. The only provider that creates a real draft in the mailbox for you to eyeball before sending.
+- Zoho Mail. SMTP with your Zoho address and an app-specific password. The same fields work for any SMTP mailbox, just change the host. No drafts API, so approving holds the message in the queue and sending goes straight out.
+- Resend. An API key from <https://resend.com> plus a sending domain you verified there. The from address must be on that domain.
+
+Set the from address and from name once at the top of the Email section, then fill in the provider you picked and click Test email credentials.
+
+### Gmail, drafts and sending
 
 The server creates drafts and sends via the Gmail API using an OAuth2 **refresh token** for the sending account.
 
@@ -59,7 +82,7 @@ The server creates drafts and sends via the Gmail API using an OAuth2 **refresh 
 
 The `gmail.modify` scope covers creating drafts, sending, and reading thread ids for follow-ups.
 
-> **Deliverability tip:** use a real domain mailbox with SPF/DKIM/DMARC set, warm it up, and keep `DAILY_EMAIL_CAP` low at first (10–20/day). Cold volume from a fresh Gmail hurts your sender reputation and conversion.
+> **Deliverability tip:** use a real domain mailbox with SPF/DKIM/DMARC set, warm it up, and keep `DAILY_EMAIL_CAP` low at first (10-20/day). Cold volume from a fresh Gmail hurts your sender reputation and conversion.
 
 ## 5. API key (protect the API)
 
@@ -68,7 +91,7 @@ Set `API_KEY` to a long random string. The dashboard must send the same value:
 - Dashboard build arg / env: `NEXT_PUBLIC_API_KEY`
 - Any external caller (n8n) sends header `x-api-key: <API_KEY>`
 
-Leave `API_KEY` empty **only** for local development — an empty key disables auth.
+Leave `API_KEY` empty **only** for local development, an empty key disables auth.
 
 ## 6. Verify
 

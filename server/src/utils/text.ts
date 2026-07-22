@@ -1,6 +1,6 @@
 /** Text normalization helpers. */
 
-/** Lowercase, strip punctuation and legal suffixes — used for duplicate detection. */
+/** Lowercase, strip punctuation and legal suffixes, used for duplicate detection. */
 export function normalizeBusinessName(name: string): string {
   return name
     .toLowerCase()

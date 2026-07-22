@@ -42,6 +42,7 @@ function LeadsPageInner() {
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(() => {
+    let cancelled = false;
     api
       .leads({
         search: search || undefined,
@@ -53,15 +54,27 @@ function LeadsPageInner() {
         sort: "-score",
       })
       .then((r) => {
+        if (cancelled) return; // a newer filter/page request superseded this one
         setData(r);
         setError(null);
       })
-      .catch((e: Error) => setError(e.message));
+      .catch((e: Error) => {
+        if (!cancelled) setError(e.message);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [search, websiteType, stage, outreachStatus, page]);
 
   useEffect(() => {
-    const t = setTimeout(load, search ? 350 : 0);
-    return () => clearTimeout(t);
+    let cancel: (() => void) | undefined;
+    const t = setTimeout(() => {
+      cancel = load();
+    }, search ? 350 : 0);
+    return () => {
+      clearTimeout(t);
+      cancel?.();
+    };
   }, [load, search]);
 
   return (
@@ -158,7 +171,7 @@ function LeadsPageInner() {
                   </Link>
                   <p className="text-xs capitalize text-slate-400">
                     {lead.category} · {lead.city}
-                    {lead.openingSoon && <span className="ml-1 font-semibold text-cta-500">✦ new</span>}
+                    {lead.openingSoon && <span className="ml-1 font-semibold text-cta-500">new</span>}
                   </p>
                 </td>
                 <td className="px-5 py-3.5">

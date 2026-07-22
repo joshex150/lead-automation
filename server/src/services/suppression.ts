@@ -5,7 +5,7 @@ import { extractDomain } from "../utils/url.js";
 import type { SuppressionType } from "../types.js";
 
 /**
- * Suppression list logic — the compliance backbone.
+ * Suppression list logic, the compliance backbone.
  * A lead is suppressed if ANY of its identifiers (place id, email,
  * phone, domain, instagram) matches an entry.
  */

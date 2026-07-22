@@ -9,8 +9,53 @@ import { config } from "../config/index.js";
 
 /**
  * Singleton settings document. Editable from the dashboard so search
- * targets and scoring can be tuned without redeploying.
+ * targets, scoring, providers and credentials can be tuned without
+ * redeploying. Integration credentials live here (DB) with env vars as
+ * fallback, see config/runtime.ts for the resolution rules.
  */
+
+export type AiProvider = "AUTO" | "OPENAI" | "ANTHROPIC" | "NVIDIA" | "CUSTOM" | "NONE";
+export type EmailProviderName = "AUTO" | "GMAIL" | "ZOHO" | "RESEND" | "NONE";
+
+export interface AiSettings {
+  provider: AiProvider;
+  apiKey: string;
+  model: string;
+  /** Base URL for OpenAI-compatible endpoints (used by CUSTOM; optional override for OPENAI/NVIDIA). */
+  baseUrl: string;
+}
+
+export interface EmailSettings {
+  provider: EmailProviderName;
+  fromAddress: string;
+  fromName: string;
+  gmail: { clientId: string; clientSecret: string; refreshToken: string };
+  zoho: { host: string; port: number; secure: boolean; user: string; password: string };
+  resend: { apiKey: string };
+}
+
+export interface SchedulerSettings {
+  /** null = inherit from ENABLE_SCHEDULER env (default true). */
+  enabled: boolean | null;
+  discoveryCron: string;
+  followUpCron: string;
+  timezone: string;
+}
+
+export interface CheckerSettings {
+  timeoutMs: number;
+  maxRedirects: number;
+  concurrency: number;
+}
+
+export interface IntegrationSettings {
+  googlePlacesApiKey: string;
+  ai: AiSettings;
+  email: EmailSettings;
+  scheduler: SchedulerSettings;
+  checker: CheckerSettings;
+}
+
 export interface SettingsDocument extends Document {
   key: "global";
   cities: string[];
@@ -23,6 +68,7 @@ export interface SettingsDocument extends Document {
   discoveryEnabled: boolean;
   /** Max Places results requested per query (each page = 20; 3 pages max). */
   maxResultsPerQuery: number;
+  integrations: IntegrationSettings;
   updatedAt: Date;
 }
 
@@ -51,6 +97,54 @@ const settingsSchema = new Schema<SettingsDocument>(
     dailyEmailCap: { type: Number, default: config.DAILY_EMAIL_CAP },
     discoveryEnabled: { type: Boolean, default: true },
     maxResultsPerQuery: { type: Number, default: 60 },
+    integrations: {
+      googlePlacesApiKey: { type: String, default: "" },
+      ai: {
+        provider: {
+          type: String,
+          enum: ["AUTO", "OPENAI", "ANTHROPIC", "NVIDIA", "CUSTOM", "NONE"],
+          default: "AUTO",
+        },
+        apiKey: { type: String, default: "" },
+        model: { type: String, default: "" },
+        baseUrl: { type: String, default: "" },
+      },
+      email: {
+        provider: {
+          type: String,
+          enum: ["AUTO", "GMAIL", "ZOHO", "RESEND", "NONE"],
+          default: "AUTO",
+        },
+        fromAddress: { type: String, default: "" },
+        fromName: { type: String, default: "" },
+        gmail: {
+          clientId: { type: String, default: "" },
+          clientSecret: { type: String, default: "" },
+          refreshToken: { type: String, default: "" },
+        },
+        zoho: {
+          host: { type: String, default: "smtp.zoho.com" },
+          port: { type: Number, default: 465 },
+          secure: { type: Boolean, default: true },
+          user: { type: String, default: "" },
+          password: { type: String, default: "" },
+        },
+        resend: {
+          apiKey: { type: String, default: "" },
+        },
+      },
+      scheduler: {
+        enabled: { type: Boolean, default: null },
+        discoveryCron: { type: String, default: "" },
+        followUpCron: { type: String, default: "" },
+        timezone: { type: String, default: "" },
+      },
+      checker: {
+        timeoutMs: { type: Number, default: 0 },
+        maxRedirects: { type: Number, default: 0 },
+        concurrency: { type: Number, default: 0 },
+      },
+    },
   },
   { timestamps: true },
 );

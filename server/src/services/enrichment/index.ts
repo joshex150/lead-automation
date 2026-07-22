@@ -76,7 +76,7 @@ export async function enrichLead(lead: LeadDocument, homepageHtml?: string | nul
             }
           }
         } catch {
-          /* invalid contact URL — skip */
+          /* invalid contact URL, skip */
         }
       }
     }

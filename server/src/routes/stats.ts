@@ -3,14 +3,15 @@ import { Lead } from "../models/Lead.js";
 import { OutreachLog } from "../models/OutreachLog.js";
 import { SearchRun } from "../models/SearchRun.js";
 import { asyncHandler } from "../middleware/index.js";
-import { integrations } from "../config/index.js";
+import { integrationStatus } from "../config/runtime.js";
 
 export const statsRouter = Router();
 
-/** GET /api/stats — dashboard funnel + revenue tracking. */
+/** GET /api/stats, dashboard funnel + revenue tracking. */
 statsRouter.get(
   "/",
   asyncHandler(async (_req, res) => {
+    const status = await integrationStatus();
     const [byStage, byWebsiteType, byCity, byOutreach, totals, revenue, convertedDealsCount, recentRuns, recentActivity] =
       await Promise.all([
         Lead.aggregate([{ $group: { _id: "$pipelineStage", count: { $sum: 1 } } }]),
@@ -55,10 +56,14 @@ statsRouter.get(
       recentRuns,
       recentActivity,
       integrations: {
-        googlePlaces: integrations.placesConfigured,
-        ai: integrations.aiConfigured,
-        gmail: integrations.gmailConfigured,
-        authEnabled: integrations.authEnabled,
+        googlePlaces: status.googlePlaces.configured,
+        ai: status.ai.configured,
+        aiProvider: status.ai.provider,
+        email: status.email.configured,
+        emailProvider: status.email.provider,
+        // kept for older dashboard builds
+        gmail: status.email.configured && status.email.provider === "gmail",
+        authEnabled: status.authEnabled,
       },
     });
   }),

@@ -27,7 +27,7 @@ export interface ProbeResult {
   error: string | null;
 }
 
-const MAX_HTML_BYTES = 2_000_000; // 2MB cap — enough for any homepage head/body signals
+const MAX_HTML_BYTES = 2_000_000; // 2MB cap, enough for any homepage head/body signals
 const UA =
   "Mozilla/5.0 (compatible; YEANLeadBot/1.0; website health check; +https://yean.tech)";
 
