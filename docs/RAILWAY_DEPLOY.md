@@ -103,6 +103,7 @@ Every start command is explicit (`node dist/index.js` for the API, `next start` 
 
 | Symptom | Fix |
 |---|---|
+| Dashboard URL shows `{"ok":true,"service":"yean-lead-automation"}` | The dashboard service is running the API. It has no Root Directory, so Railway used the repo-root `Dockerfile` (which builds the API). Set that service's Root Directory to `dashboard` and redeploy. |
 | `npm error No workspaces found: --workspace=@yean/dashboard` (or `@yean/server`) | The service is building the whole repo as a workspace. Set its Root Directory to `dashboard` / `server` (or set the Dockerfile Path per the section above) and redeploy. The repo's `railway.json` files pin an explicit start command so this won't recur. |
 | `could not locate the Dockerfile at path Dockerfile in code archive` | Set the service Root Directory to `server` / `dashboard`, or set the Dockerfile Path to `Dockerfile.server` / `Dockerfile.dashboard`. |
 | Healthcheck fails / "service unavailable" on every retry | The container isn't starting or isn't binding to `PORT`. With Root Directory set this is fixed: both apps bind to `0.0.0.0` on the injected `PORT` and answer `/health`. Check the deploy logs for a crash before the "listening" line. |
