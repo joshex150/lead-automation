@@ -1,6 +1,21 @@
 # Deploy to Railway
 
-Two services (API + dashboard) plus a MongoDB, all in one Railway project. ~10 minutes.
+Two services (API + dashboard) plus a MongoDB, all in one Railway project. About 10 minutes.
+
+## Read this first: the Dockerfile path
+
+This is a monorepo (`server/` and `dashboard/` in one repo), so each Railway service has to be told where its Dockerfile is. Get this wrong and the build fails with:
+
+```
+could not locate the Dockerfile at path Dockerfile in code archive
+```
+
+That error means Railway looked at the repository root and found no `Dockerfile` there (there isn't one at the root by design). Pick one of these two ways to point each service at the right Dockerfile. You only need one.
+
+- Option A (recommended): set the service's Root Directory to `server` or `dashboard`. Railway then builds inside that folder and uses `server/Dockerfile` or `dashboard/Dockerfile`.
+- Option B: leave Root Directory empty and set the Dockerfile Path to `Dockerfile.server` or `Dockerfile.dashboard` (both live at the repo root and build from there).
+
+The steps below use Option A. If Option A gives you trouble, jump to "Option B" near the end; both are tested.
 
 ---
 
@@ -13,8 +28,7 @@ Railway exposes the connection string as `${{MongoDB.MONGO_URL}}` for other serv
 ## 2. API service (`server/`)
 
 1. **+ New → GitHub Repo →** select this repo.
-2. **Settings → Root Directory:** `server`
-   - Railway auto-detects `server/Dockerfile` and `server/railway.json` (health check `/health`).
+2. **Settings → Source → Root Directory:** set it to `server` (this is the step that fixes the "could not locate the Dockerfile" error). With this set, Railway builds inside `server/` and uses `server/Dockerfile` and `server/railway.json` (health check `/health`).
 3. **Variables:**
    ```
    MONGODB_URI=${{MongoDB.MONGO_URL}}
@@ -39,7 +53,7 @@ Railway exposes the connection string as `${{MongoDB.MONGO_URL}}` for other serv
 `NEXT_PUBLIC_*` values are baked in at **build time**, so they're passed as Docker **build args**.
 
 1. **+ New → GitHub Repo →** same repo.
-2. **Settings → Root Directory:** `dashboard`
+2. **Settings → Source → Root Directory:** set it to `dashboard` (same fix as the API service).
 3. **Settings → Build → Build args** (or Variables, Railway forwards them to the Docker build):
    ```
    NEXT_PUBLIC_API_URL=https://yean-api.up.railway.app
@@ -65,12 +79,22 @@ Railway exposes the connection string as `${{MongoDB.MONGO_URL}}` for other serv
 - Keep `DAILY_EMAIL_CAP` conservative to protect Gmail sender reputation.
 - MongoDB free/hobby tiers are plenty for tens of thousands of leads.
 
+## Option B: deploy without a Root Directory
+
+If setting the Root Directory doesn't work for you, leave it empty and point each service at a root-level Dockerfile instead. These build from the repository root and copy in only their own folder.
+
+- API service: **Settings → Build → Builder = Dockerfile**, **Dockerfile Path = `Dockerfile.server`**. Same variables as section 2. Set the health check path to `/health` under Settings → Deploy.
+- Dashboard service: **Builder = Dockerfile**, **Dockerfile Path = `Dockerfile.dashboard`**. Same build args as section 3.
+
+Everything else (variables, domains, CORS) is identical. Use either Option A or Option B per service, not both.
+
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
+| `could not locate the Dockerfile at path Dockerfile in code archive` | The service has no Root Directory set, so Railway looked at the repo root where there's no Dockerfile. Set Root Directory to `server` or `dashboard` (Option A), or use Option B above and set Dockerfile Path to `Dockerfile.server` / `Dockerfile.dashboard`. |
 | Dashboard shows "Can't reach the API" | Check `NEXT_PUBLIC_API_URL` build arg + API `DASHBOARD_ORIGIN` (CORS) + `NEXT_PUBLIC_API_KEY` matches `API_KEY`. |
-| `/api/*` returns 401 | Dashboard's `NEXT_PUBLIC_API_KEY` ≠ server `API_KEY`. |
-| Discovery returns 503 | `GOOGLE_PLACES_API_KEY` missing or Places API (New) not enabled/billed. |
-| Approve works but no draft | Gmail vars missing/invalid, check the server logs; approval still recorded. |
-| Health check failing on deploy | Ensure `PORT` matches Railway's injected port (Railway sets `PORT` automatically; the app reads it). |
+| `/api/*` returns 401 | Dashboard's `NEXT_PUBLIC_API_KEY` differs from the server `API_KEY`. |
+| Discovery returns 503 | No discovery source configured. Add a Google Places key (and enable Places API New with billing), or enable manual import / the directory source. |
+| Approve works but no draft | Email provider not configured or Gmail creds invalid; check the server logs. The approval is still recorded. |
+| Health check failing on deploy | Railway injects `PORT` automatically and the app reads it. With Option B, set the health check path to `/health` in the UI (Option A gets it from `server/railway.json`). |

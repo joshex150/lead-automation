@@ -67,9 +67,11 @@ Or run everything with Docker: `docker compose up --build`.
 Full walkthrough: **[docs/RAILWAY_DEPLOY.md](docs/RAILWAY_DEPLOY.md)**. Short version:
 
 1. Create a Railway project → **Deploy MongoDB** from the template gallery.
-2. **New service → GitHub repo**, set *Root Directory* = `server`. Add env vars (`MONGODB_URI=${{MongoDB.MONGO_URL}}`, `API_KEY`, `GOOGLE_PLACES_API_KEY`, AI + Gmail keys).
+2. **New service → GitHub repo**, set *Root Directory* = `server` (this is the step that avoids the "could not locate the Dockerfile" error on a monorepo). Add env vars (`MONGODB_URI=${{MongoDB.MONGO_URL}}`, `API_KEY`, optionally `GOOGLE_PLACES_API_KEY` and AI/email keys, or set those later in the dashboard).
 3. **New service → same repo**, *Root Directory* = `dashboard`. Set build args `NEXT_PUBLIC_API_URL` (the server's public URL) and `NEXT_PUBLIC_API_KEY`.
-4. Done. The server's built-in cron discovers leads every morning (Africa/Lagos) and queues pitches for you.
+4. Done. First open of the dashboard runs the setup wizard; the server's built-in cron then discovers leads every morning (Africa/Lagos) and queues pitches for you.
+
+If a service can't find its Dockerfile, either set that service's Root Directory as above, or use the repo-root `Dockerfile.server` / `Dockerfile.dashboard` with no Root Directory. Full details and both options: [docs/RAILWAY_DEPLOY.md](docs/RAILWAY_DEPLOY.md).
 
 ## Configuration
 
