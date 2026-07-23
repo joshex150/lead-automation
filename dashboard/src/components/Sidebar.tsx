@@ -37,8 +37,8 @@ export function Sidebar() {
     };
   }, [open]);
 
-  const nav = (
-    <nav id="primary-navigation" className="flex flex-col border-t border-slate-200 dark:border-slate-800">
+  const renderNav = (id?: string) => (
+    <nav id={id} className="flex flex-col border-t border-slate-200 dark:border-slate-800">
       {NAV.map(({ href, label, icon: Icon }) => {
         const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
         return (
@@ -69,7 +69,7 @@ export function Sidebar() {
           className="btn-ghost h-11 w-11 !p-0"
           aria-label={open ? "Close navigation" : "Open navigation"}
           aria-expanded={open}
-          aria-controls="primary-navigation"
+          aria-controls="mobile-navigation"
         >
           {open ? <RiCloseLine className="h-5 w-5" /> : <RiMenuLine className="h-5 w-5" />}
         </button>
@@ -77,7 +77,7 @@ export function Sidebar() {
 
       {open && (
         <div className="fixed inset-x-0 bottom-0 top-16 z-40 overflow-y-auto border-b border-slate-200 bg-white lg:hidden dark:border-slate-800 dark:bg-slate-950">
-          {nav}
+          {renderNav("mobile-navigation")}
           <EngineNote />
         </div>
       )}
@@ -86,7 +86,7 @@ export function Sidebar() {
         <div className="flex h-20 items-center border-b border-slate-200 px-5 dark:border-slate-800">
           <Brand />
         </div>
-        <div className="flex-1 overflow-y-auto">{nav}</div>
+        <div className="flex-1 overflow-y-auto">{renderNav()}</div>
         <EngineNote />
       </aside>
     </>
