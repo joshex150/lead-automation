@@ -6,33 +6,163 @@
   color-scheme: light dark;
 }
 
+html,
 body {
+  width: 100%;
+  min-width: 0;
+  min-height: 100%;
+  overflow-x: hidden;
+}
+
+html {
+  background: rgb(248 250 252);
+}
+
+html.dark {
+  background: rgb(2 6 23);
+}
+
+body {
+  min-height: 100vh;
+  min-height: 100dvh;
+  margin: 0;
   @apply bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 font-body antialiased;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  border-radius: 0 !important;
+}
+
+body * {
+  box-shadow: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+:focus-visible {
+  outline: 2px solid #3b82f6;
+  outline-offset: 2px;
+}
+
+img,
+svg,
+video,
+canvas {
+  max-width: 100%;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+input,
+textarea,
+select {
+  font-size: 16px !important;
+}
+
+.app-shell {
+  width: 100%;
+  min-width: 0;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.app-main {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.app-main > * {
+  width: 100%;
+  max-width: none !important;
+  margin-inline: 0 !important;
+}
+
+.glass-card {
+  transform: none !important;
+}
+
+/* Flatten Tailwind gradient surfaces into solid semantic colours. */
+[class*="bg-gradient-to-"] {
+  background-image: none !important;
+  background-color: #2563eb !important;
+}
+
+[class*="bg-gradient-to-"][class*="from-purple-"] {
+  background-color: #7c3aed !important;
+}
+
+[class*="bg-gradient-to-"][class*="from-emerald-"] {
+  background-color: #059669 !important;
+}
+
+[class*="bg-gradient-to-"][class*="from-cta-"] {
+  background-color: #f97316 !important;
+}
+
+[class*="bg-gradient-to-"][class*="from-rose-"] {
+  background-color: #e11d48 !important;
+}
+
+[class*="bg-gradient-to-"][class*="/10"] {
+  background-color: rgb(241 245 249) !important;
+}
+
+.dark [class*="bg-gradient-to-"][class*="/10"] {
+  background-color: rgb(15 23 42) !important;
+}
+
+.bg-clip-text.text-transparent {
+  background-color: transparent !important;
+  color: #2563eb !important;
 }
 
 @layer components {
   .glass-card {
-    @apply rounded-2xl border border-slate-200/70 bg-white/80 shadow-xl shadow-slate-200/40 backdrop-blur-xl transition-shadow dark:border-slate-800/70 dark:bg-slate-900/70 dark:shadow-black/20;
+    @apply border border-slate-200 bg-white transition-colors dark:border-slate-800 dark:bg-slate-900;
   }
+
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:cursor-not-allowed disabled:opacity-50 active:scale-[0.98];
+    @apply inline-flex min-h-11 items-center justify-center gap-2 border border-transparent px-4 py-2.5 text-sm font-semibold transition-colors focus:outline-none disabled:cursor-not-allowed disabled:opacity-50;
   }
+
   .btn-primary {
-    @apply btn bg-gradient-to-r from-brand-600 to-brand-500 text-white shadow-lg shadow-brand-500/25 hover:shadow-brand-500/40 hover:brightness-110;
+    @apply btn border-brand-600 bg-brand-600 text-white hover:bg-brand-700;
   }
+
   .btn-cta {
-    @apply btn bg-gradient-to-r from-cta-500 to-cta-400 text-white shadow-lg shadow-cta-500/25 hover:shadow-cta-500/40 hover:brightness-110;
+    @apply btn border-cta-500 bg-cta-500 text-white hover:bg-cta-600;
   }
+
   .btn-ghost {
-    @apply btn border border-slate-200 bg-white/60 text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-200 dark:hover:bg-slate-800;
+    @apply btn border-slate-300 bg-white text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800;
   }
+
   .btn-danger {
-    @apply btn bg-gradient-to-r from-rose-600 to-rose-500 text-white shadow-lg shadow-rose-500/25 hover:shadow-rose-500/40;
+    @apply btn border-rose-600 bg-rose-600 text-white hover:bg-rose-700;
   }
+
   .input {
-    @apply w-full rounded-xl border border-slate-200 bg-white/70 px-3.5 py-2.5 text-sm text-slate-900 placeholder-slate-400 outline-none backdrop-blur transition focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-100;
+    @apply w-full min-h-11 border border-slate-300 bg-white px-3.5 py-2.5 text-base text-slate-900 placeholder-slate-400 outline-none transition-colors focus:border-brand-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100;
   }
+
   .label {
     @apply mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400;
+  }
+}
+
+@media (max-width: 640px) {
+  .app-main {
+    padding-inline: 1rem;
   }
 }
