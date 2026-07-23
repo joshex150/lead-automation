@@ -1,0 +1,82 @@
+/* Route-specific polish layered over the shared flat design system. */
+
+html[data-route="settings"] .app-main > div {
+  max-width: none !important;
+  padding-bottom: 7rem;
+}
+
+html[data-route="settings"] .app-main > div > header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  margin: -2rem -2rem 0;
+  padding: 1.5rem 2rem 1rem;
+  border-bottom: 1px solid rgb(var(--line));
+  background: rgb(var(--page-bg) / 0.97);
+}
+
+html[data-route="settings"] .app-main > div > header h1 {
+  font-size: clamp(1.75rem, 3vw, 2.5rem);
+  line-height: 1.05;
+  letter-spacing: -0.035em;
+}
+
+html[data-route="settings"] .app-main section {
+  scroll-margin-top: 7rem;
+}
+
+html[data-route="settings"] .app-main section.glass-card {
+  border-top: 4px solid #2563eb;
+  background: rgb(var(--surface));
+}
+
+html[data-route="settings"] .app-main section.glass-card > h2,
+html[data-route="settings"] .app-main section.glass-card > :first-child h2 {
+  letter-spacing: -0.02em;
+}
+
+html[data-route="settings"] .app-main section.glass-card .grid > div[class*="border"] {
+  background: rgb(var(--surface));
+}
+
+html[data-route="settings"] .app-main section.glass-card .grid > div[class*="border-brand"] {
+  border-left: 4px solid #2563eb;
+  background: rgb(37 99 235 / 0.04);
+}
+
+html[data-route="settings"] .app-main label[class*="justify-between"] {
+  border-color: rgb(var(--line));
+  background: rgb(var(--surface));
+}
+
+html[data-route="settings"] .app-main label[class*="justify-between"]:hover {
+  background: rgb(37 99 235 / 0.04);
+}
+
+html[data-route="settings"] .app-main .fixed.inset-x-0.bottom-0 {
+  border-color: rgb(var(--line));
+  background: rgb(var(--surface));
+}
+
+@media (max-width: 1023px) {
+  html[data-route="settings"] .app-main > div > header {
+    top: 4rem;
+  }
+}
+
+@media (max-width: 767px) {
+  html[data-route="settings"] .app-main > div > header {
+    align-items: flex-start;
+    flex-direction: column;
+    margin: -1.25rem -1rem 0;
+    padding: 1rem;
+  }
+
+  html[data-route="settings"] .app-main > div > header > div:last-child {
+    width: 100%;
+  }
+
+  html[data-route="settings"] .app-main > div > header > div:last-child > button {
+    flex: 1 1 auto;
+  }
+}
