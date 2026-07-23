@@ -72,6 +72,11 @@ select {
   min-width: 0;
   min-height: 100vh;
   min-height: 100dvh;
+  background: rgb(248 250 252);
+}
+
+.dark .app-shell {
+  background: rgb(2 6 23);
 }
 
 .app-main {
@@ -86,6 +91,19 @@ select {
   width: 100%;
   max-width: none !important;
   margin-inline: 0 !important;
+}
+
+/* Keep the dashboard visually fixed even where legacy components still use motion libraries. */
+.app-shell [style*="transform"] {
+  transform: none !important;
+}
+
+.app-shell [style*="opacity"] {
+  opacity: 1 !important;
+}
+
+.app-shell .animate-pulse {
+  animation: none !important;
 }
 
 .glass-card {
@@ -114,10 +132,12 @@ select {
   background-color: #e11d48 !important;
 }
 
+[class*="bg-gradient-to-"][class*="/8"],
 [class*="bg-gradient-to-"][class*="/10"] {
   background-color: rgb(241 245 249) !important;
 }
 
+.dark [class*="bg-gradient-to-"][class*="/8"],
 .dark [class*="bg-gradient-to-"][class*="/10"] {
   background-color: rgb(15 23 42) !important;
 }
@@ -164,5 +184,13 @@ select {
 @media (max-width: 640px) {
   .app-main {
     padding-inline: 1rem;
+  }
+
+  .btn,
+  .btn-primary,
+  .btn-cta,
+  .btn-ghost,
+  .btn-danger {
+    min-height: 44px;
   }
 }
