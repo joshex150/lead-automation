@@ -1,5 +1,18 @@
 /* Route-specific polish layered over the shared flat design system. */
 
+/* Explicit semantic utility coverage for runtime-selected dashboard accents. */
+.bg-brand-600 {
+  background-color: #2563eb;
+}
+
+.bg-cta-600 {
+  background-color: #ea580c;
+}
+
+.bg-rose-600 {
+  background-color: #e11d48;
+}
+
 html[data-route="settings"] .app-main > div {
   max-width: none !important;
   padding-bottom: 7rem;
