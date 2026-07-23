@@ -5,6 +5,7 @@ import { RiLoader4Line } from "react-icons/ri";
 import { Sidebar } from "@/components/Sidebar";
 import { OnboardingGate } from "@/components/OnboardingGate";
 import "./globals.css";
+import "./enhancements.css";
 
 const spaceGrotesk = Space_Grotesk({ subsets: ["latin"], variable: "--font-space-grotesk" });
 const dmSans = DM_Sans({ subsets: ["latin"], variable: "--font-dm-sans" });
@@ -36,7 +37,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           toastOptions={{
             className: "!border !border-slate-700 !bg-slate-900 !text-white dark:!border-slate-200 dark:!bg-white dark:!text-slate-900",
             loading: {
-              icon: <RiLoader4Line className="h-5 w-5 shrink-0 animate-spin rounded-full" aria-hidden="true" />,
+              icon: <RiLoader4Line className="h-5 w-5 shrink-0 animate-spin" aria-hidden="true" />,
             },
           }}
         />
