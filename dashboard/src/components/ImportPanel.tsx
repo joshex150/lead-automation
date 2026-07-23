@@ -173,7 +173,7 @@ export function ImportPanel({ open, onClose, onDone }: { open: boolean; onClose:
                       {row.email ?? row.instagramUsername ?? row.phone ?? row.websiteUrl ?? "No contact signal"}
                     </p>
                     <p className="mt-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                      {row.city ?? city || "City unset"} · {row.category ?? category || "Category unset"}
+                      {(row.city ?? city) || "City unset"} · {(row.category ?? category) || "Category unset"}
                     </p>
                   </div>
                 ))}
