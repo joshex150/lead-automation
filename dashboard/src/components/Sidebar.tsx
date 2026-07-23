@@ -25,6 +25,8 @@ const NAV = [
   { href: "/settings", label: "Settings", icon: RiSettings4Line },
 ];
 
+const SETTINGS_SECTIONS = ["Discovery", "AI writer", "Email", "Lead sources", "Scheduler", "Guardrails", "Scoring"];
+
 export function Sidebar() {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
@@ -33,6 +35,11 @@ export function Sidebar() {
 
   useEffect(() => {
     setOpen(false);
+    document.documentElement.dataset.route = pathname.startsWith("/settings")
+      ? "settings"
+      : pathname.startsWith("/leads/")
+        ? "lead-detail"
+        : pathname.split("/")[1] || "overview";
   }, [pathname]);
 
   useEffect(() => {
@@ -141,7 +148,10 @@ export function Sidebar() {
         <div className={`flex h-20 items-center border-b border-slate-200 dark:border-slate-800 ${collapsed ? "justify-center px-2" : "px-5"}`}>
           <Brand compact={collapsed} />
         </div>
-        <div className="flex-1 overflow-y-auto">{renderNav(undefined, collapsed)}</div>
+        <div className="flex-1 overflow-y-auto">
+          {renderNav(undefined, collapsed)}
+          {pathname.startsWith("/settings") && !collapsed && <SettingsSectionNavigation />}
+        </div>
         {!collapsed && <EngineNote />}
         <button
           type="button"
@@ -157,6 +167,31 @@ export function Sidebar() {
         </button>
       </aside>
     </>
+  );
+}
+
+function SettingsSectionNavigation() {
+  function scrollToSection(index: number) {
+    const sections = document.querySelectorAll<HTMLElement>("main section");
+    sections[index]?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  return (
+    <nav aria-label="Settings sections" className="border-b border-slate-200 px-4 py-4 dark:border-slate-800">
+      <p className="mb-2 text-[10px] font-extrabold uppercase tracking-[0.16em] text-slate-400">Settings sections</p>
+      <div className="border-l border-slate-300 dark:border-slate-700">
+        {SETTINGS_SECTIONS.map((section, index) => (
+          <button
+            key={section}
+            type="button"
+            onClick={() => scrollToSection(index)}
+            className="block w-full border-l-2 border-l-transparent px-3 py-1.5 text-left text-xs font-semibold text-slate-500 hover:border-l-brand-600 hover:bg-brand-500/5 hover:text-brand-600 dark:text-slate-400"
+          >
+            {section}
+          </button>
+        ))}
+      </div>
+    </nav>
   );
 }
 
