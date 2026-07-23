@@ -1,10 +1,11 @@
 import type { Metadata, Viewport } from "next";
 import { DM_Sans, Space_Grotesk } from "next/font/google";
 import { Toaster } from "react-hot-toast";
+import { RiLoader4Line } from "react-icons/ri";
 import { Sidebar } from "@/components/Sidebar";
 import { OnboardingGate } from "@/components/OnboardingGate";
-import { AnimatedBackground } from "@/lib/motion";
 import "./globals.css";
+import "./enhancements.css";
 
 const spaceGrotesk = Space_Grotesk({ subsets: ["latin"], variable: "--font-space-grotesk" });
 const dmSans = DM_Sans({ subsets: ["latin"], variable: "--font-dm-sans" });
@@ -23,24 +24,21 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={`${spaceGrotesk.variable} ${dmSans.variable}`}>
       <body>
-        <div className="relative min-h-screen">
-          <AnimatedBackground />
-          {/* First-run wizard gates the app until finished or skipped. */}
-          <OnboardingGate>
-            <div className="flex">
-              <Sidebar />
-              {/* min-w-0 lets wide tables scroll inside their own container
-                  instead of stretching the page sideways on small screens. */}
-              <main className="min-h-screen min-w-0 flex-1 overflow-x-clip px-4 pb-16 pt-6 sm:px-8 lg:px-10">
-                {children}
-              </main>
-            </div>
-          </OnboardingGate>
-        </div>
+        <OnboardingGate>
+          <div className="app-shell flex">
+            <Sidebar />
+            <main className="app-main min-w-0 flex-1 overflow-x-hidden px-4 pb-16 pt-20 sm:px-6 lg:px-8 lg:pt-8">
+              {children}
+            </main>
+          </div>
+        </OnboardingGate>
         <Toaster
           position="top-right"
           toastOptions={{
-            className: "!rounded-xl !bg-slate-900 !text-white dark:!bg-white dark:!text-slate-900",
+            className: "!border !border-slate-700 !bg-slate-900 !text-white dark:!border-slate-200 dark:!bg-white dark:!text-slate-900",
+            loading: {
+              icon: <RiLoader4Line className="h-5 w-5 shrink-0 animate-spin" aria-hidden="true" />,
+            },
           }}
         />
       </body>

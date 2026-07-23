@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import toast from "react-hot-toast";
-import { motion } from "framer-motion";
 import {
   RiMailLine,
   RiInstagramLine,
@@ -11,28 +10,40 @@ import {
   RiMapPin2Line,
   RiCheckLine,
   RiCloseLine,
-  RiRefreshLine,
   RiFileCopyLine,
   RiExternalLinkLine,
   RiSendPlaneFill,
   RiSparkling2Line,
+  RiLoader4Line,
+  RiTimeLine,
+  RiErrorWarningLine,
 } from "react-icons/ri";
 import { api } from "@/lib/api";
 import type { Lead } from "@/lib/types";
 import { ScoreBadge, WebsiteTypeBadge } from "./badges";
 
-export function QueueCard({ lead: initial, onDone }: { lead: Lead; onDone: (id: string) => void }) {
+export function QueueCard({
+  lead: initial,
+  onDone,
+  position,
+  total,
+}: {
+  lead: Lead;
+  onDone: (id: string) => void;
+  position?: number;
+  total?: number;
+}) {
   const [lead, setLead] = useState(initial);
   const [subject, setSubject] = useState(initial.pitchSubject ?? "");
   const [message, setMessage] = useState(initial.pitchMessage ?? "");
   const [busy, setBusy] = useState<string | null>(null);
   const dirty = subject !== (lead.pitchSubject ?? "") || message !== (lead.pitchMessage ?? "");
 
-  async function run<T>(label: string, fn: () => Promise<T>, after?: (r: T) => void) {
+  async function run<T>(label: string, fn: () => Promise<T>, after?: (result: T) => void) {
     setBusy(label);
     try {
-      const r = await fn();
-      after?.(r);
+      const result = await fn();
+      after?.(result);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : `${label} failed`);
     } finally {
@@ -47,17 +58,21 @@ export function QueueCard({ lead: initial, onDone }: { lead: Lead; onDone: (id: 
   }
 
   const approve = () =>
-    run("approve", async () => {
-      await saveIfDirty();
-      return api.approve(lead._id);
-    }, (r) => {
-      if (r.draft?.draftId) toast.success("Approved. Draft created in your Gmail.");
-      else if (r.draft?.internal) toast.success(`Approved. Ready to send via ${r.draft.provider}.`);
-      else if (r.draftError) toast.success(`Approved. ${r.draftError}`);
-      else toast.success("Approved");
-      setLead(r.lead);
-      if (lead.outreachChannel !== "EMAIL") onDone(lead._id);
-    });
+    run(
+      "approve",
+      async () => {
+        await saveIfDirty();
+        return api.approve(lead._id);
+      },
+      (result) => {
+        if (result.draft?.draftId) toast.success("Approved. Draft created in Gmail.");
+        else if (result.draft?.internal) toast.success(`Approved. Ready to send via ${result.draft.provider}.`);
+        else if (result.draftError) toast.success(`Approved. ${result.draftError}`);
+        else toast.success("Approved");
+        setLead(result.lead);
+        if (lead.outreachChannel !== "EMAIL") onDone(lead._id);
+      },
+    );
 
   const sendNow = () =>
     run("send", () => api.send(lead._id), () => {
@@ -72,10 +87,10 @@ export function QueueCard({ lead: initial, onDone }: { lead: Lead; onDone: (id: 
     });
 
   const regenerate = () =>
-    run("regen", () => api.regeneratePitch(lead._id), (r) => {
-      setLead(r.lead);
-      setSubject(r.lead.pitchSubject ?? "");
-      setMessage(r.lead.pitchMessage ?? "");
+    run("regen", () => api.regeneratePitch(lead._id), (result) => {
+      setLead(result.lead);
+      setSubject(result.lead.pitchSubject ?? "");
+      setMessage(result.lead.pitchMessage ?? "");
       toast.success("New pitch generated");
     });
 
@@ -87,68 +102,66 @@ export function QueueCard({ lead: initial, onDone }: { lead: Lead; onDone: (id: 
 
   function copyMessage() {
     navigator.clipboard.writeText(message).then(
-      () => toast.success("Message copied, paste it in the DM"),
+      () => toast.success("Message copied. Paste it in the DM."),
       () => toast.error("Copy failed"),
     );
   }
 
   const isApproved = lead.approval.status === "APPROVED";
   const emailChannel = lead.outreachChannel === "EMAIL" && Boolean(lead.email);
+  const accent = lead.leadScore >= 70 ? "border-l-emerald-500" : lead.leadScore >= 50 ? "border-l-cta-500" : "border-l-slate-500";
+  const issueCount = lead.websiteCheck?.issues?.length ?? 0;
 
   return (
-    <motion.article
-      layout
-      initial={{ opacity: 0, y: 24 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, scale: 0.96 }}
-      className="glass-card overflow-hidden"
-    >
-      {/* Header */}
-      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200/60 p-5 dark:border-slate-800/60">
-        <div className="flex items-center gap-3.5">
+    <article className={`queue-card glass-card overflow-hidden border-l-4 ${accent}`}>
+      <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-200 p-5 dark:border-slate-800">
+        <div className="flex min-w-0 items-start gap-3.5">
           <ScoreBadge score={lead.leadScore} />
-          <div>
-            <h3 className="font-heading text-lg font-bold leading-tight">{lead.businessName}</h3>
-            <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-slate-500 dark:text-slate-400">
+          <div className="min-w-0">
+            {position && total && (
+              <p className="mb-1 text-[10px] font-extrabold uppercase tracking-[0.14em] text-slate-400">
+                Review {position} of {total}
+              </p>
+            )}
+            <h2 className="truncate font-heading text-xl font-extrabold tracking-tight">{lead.businessName}</h2>
+            <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
               <span className="capitalize">{lead.category}</span>
-              <span className="inline-flex items-center gap-0.5">
+              <span className="inline-flex items-center gap-1">
                 <RiMapPin2Line /> {lead.city}
               </span>
-              {lead.openingSoon && <span className="font-semibold text-cta-500">opening soon</span>}
+              <span className="font-bold text-slate-700 dark:text-slate-200">{lead.outreachChannel.replaceAll("_", " ")}</span>
             </p>
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
           <WebsiteTypeBadge type={lead.websiteType} />
-          {isApproved && (
-            <span className="rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
-              approved{lead.gmailDraftId ? " · draft ready" : ""}
-            </span>
-          )}
+          {isApproved && <span className="status-badge text-emerald-600">Approved{lead.gmailDraftId ? " · draft ready" : ""}</span>}
         </div>
       </div>
 
-      <div className="grid gap-0 lg:grid-cols-5">
-        {/* Left: intel */}
-        <div className="space-y-4 border-b border-slate-200/60 p-5 lg:col-span-2 lg:border-b-0 lg:border-r dark:border-slate-800/60">
+      <div className="grid lg:grid-cols-12">
+        <aside className="border-b border-slate-200 p-5 lg:col-span-4 lg:border-b-0 lg:border-r dark:border-slate-800">
+          <div className="section-heading">
+            <div>
+              <h3 className="section-title">Lead intelligence</h3>
+              <p className="section-description">Why the business qualified and how to reach it.</p>
+            </div>
+          </div>
+
           {lead.websiteProblemSummary && (
-            <p className="rounded-xl bg-gradient-to-br from-brand-600/8 to-purple-600/8 p-3.5 text-sm leading-relaxed text-slate-600 dark:from-brand-500/10 dark:to-purple-500/10 dark:text-slate-300">
+            <div className="border-l-4 border-brand-600 bg-slate-50 p-3.5 text-sm leading-relaxed text-slate-600 dark:bg-slate-800/60 dark:text-slate-300">
               {lead.websiteProblemSummary}
-            </p>
+            </div>
           )}
 
-          <div className="flex flex-wrap gap-2 text-xs">
-            {lead.email && (
-              <Chip icon={<RiMailLine />} text={lead.email} />
-            )}
+          <div className="mt-4 flex flex-wrap gap-2 text-xs">
+            {lead.email && <Chip icon={<RiMailLine />} text={lead.email} />}
             {lead.instagramUsername && (
               <a href={lead.instagramUrl} target="_blank" rel="noreferrer">
                 <Chip icon={<RiInstagramLine />} text={`@${lead.instagramUsername}`} link />
               </a>
             )}
-            {lead.whatsappAvailable && lead.phoneNormalized && (
-              <Chip icon={<RiWhatsappLine />} text={lead.phoneNormalized} />
-            )}
+            {lead.whatsappAvailable && lead.phoneNormalized && <Chip icon={<RiWhatsappLine />} text={lead.phoneNormalized} />}
             {lead.websiteUrl && (
               <a href={lead.websiteUrl} target="_blank" rel="noreferrer">
                 <Chip icon={<RiGlobalLine />} text={shortUrl(lead.websiteUrl)} link />
@@ -156,15 +169,22 @@ export function QueueCard({ lead: initial, onDone }: { lead: Lead; onDone: (id: 
             )}
           </div>
 
+          <div className="mt-5 grid grid-cols-2 border border-slate-200 text-xs dark:border-slate-800">
+            <AuditMetric label="HTTP" value={lead.websiteCheck?.httpStatus?.toString() ?? "—"} />
+            <AuditMetric label="Response" value={lead.websiteCheck?.responseTimeMs ? `${lead.websiteCheck.responseTimeMs}ms` : "—"} />
+            <AuditMetric label="Issues" value={issueCount.toString()} />
+            <AuditMetric label="Contact attempts" value={lead.timesContacted.toString()} />
+          </div>
+
           {lead.scoreBreakdown.length > 0 && (
-            <div>
-              <p className="label">Why this score</p>
-              <ul className="space-y-1 text-xs text-slate-500 dark:text-slate-400">
-                {lead.scoreBreakdown.map((b) => (
-                  <li key={b.rule} className="flex justify-between gap-2">
-                    <span>{b.rule}</span>
-                    <span className={`font-bold ${b.points > 0 ? "text-emerald-500" : "text-rose-500"}`}>
-                      {b.points > 0 ? `+${b.points}` : b.points}
+            <div className="mt-5">
+              <p className="label">Score breakdown</p>
+              <ul className="divide-y divide-slate-200 border-y border-slate-200 text-xs dark:divide-slate-800 dark:border-slate-800">
+                {lead.scoreBreakdown.map((item) => (
+                  <li key={item.rule} className="flex justify-between gap-3 py-2">
+                    <span className="text-slate-500 dark:text-slate-400">{item.rule}</span>
+                    <span className={`font-extrabold tabular-nums ${item.points > 0 ? "text-emerald-600" : "text-rose-500"}`}>
+                      {item.points > 0 ? `+${item.points}` : item.points}
                     </span>
                   </li>
                 ))}
@@ -172,54 +192,66 @@ export function QueueCard({ lead: initial, onDone }: { lead: Lead; onDone: (id: 
             </div>
           )}
 
-          {lead.websiteCheck?.issues && lead.websiteCheck.issues.length > 0 && (
-            <p className="text-xs text-slate-400">
-              Site issues: {lead.websiteCheck.issues.join(", ").toLowerCase().replaceAll("_", " ")}
-            </p>
-          )}
-        </div>
-
-        {/* Right: pitch editor */}
-        <div className="space-y-3 p-5 lg:col-span-3">
-          {emailChannel && (
-            <div>
-              <label className="label" htmlFor={`subj-${lead._id}`}>
-                Subject
-              </label>
-              <input
-                id={`subj-${lead._id}`}
-                className="input font-medium"
-                value={subject}
-                onChange={(e) => setSubject(e.target.value)}
-              />
+          {issueCount > 0 && (
+            <div className="mt-5 border border-cta-500/40 bg-cta-500/5 p-3 text-xs text-slate-600 dark:text-slate-300">
+              <p className="flex items-center gap-2 font-bold text-cta-600 dark:text-cta-400">
+                <RiErrorWarningLine /> Website issues
+              </p>
+              <p className="mt-1 leading-relaxed">{lead.websiteCheck?.issues?.join(", ").toLowerCase().replaceAll("_", " ")}</p>
             </div>
           )}
-          <div>
-            <label className="label" htmlFor={`msg-${lead._id}`}>
-              {emailChannel ? "Email message" : "Instagram DM"}
-              {lead.pitchModel && (
-                <span className="ml-2 normal-case tracking-normal text-slate-400">via {lead.pitchModel}</span>
-              )}
-            </label>
-            <textarea
-              id={`msg-${lead._id}`}
-              className="input min-h-44 leading-relaxed"
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-            />
+        </aside>
+
+        <section className="p-5 lg:col-span-8">
+          <div className="section-heading">
+            <div>
+              <h3 className="section-title">Pitch review</h3>
+              <p className="section-description">Edit the message before approval. Changes save automatically when approved.</p>
+            </div>
+            {lead.pitchModel && <span className="status-badge text-purple-600">AI · {lead.pitchModel}</span>}
           </div>
 
-          {/* Actions */}
-          <div className="flex flex-wrap items-center gap-2 pt-1">
+          <div className="space-y-4">
+            {emailChannel && (
+              <div>
+                <label className="label" htmlFor={`subj-${lead._id}`}>
+                  Subject
+                </label>
+                <input
+                  id={`subj-${lead._id}`}
+                  className="input font-semibold"
+                  value={subject}
+                  onChange={(e) => setSubject(e.target.value)}
+                />
+              </div>
+            )}
+            <div>
+              <label className="label" htmlFor={`msg-${lead._id}`}>
+                {emailChannel ? "Email message" : "Instagram DM"}
+              </label>
+              <textarea
+                id={`msg-${lead._id}`}
+                className="input min-h-56 resize-y leading-relaxed"
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
+              />
+              <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
+                <span>{message.trim().split(/\s+/).filter(Boolean).length} words</span>
+                {dirty && <span className="font-bold text-cta-500">Edited · saves on approval</span>}
+              </div>
+            </div>
+          </div>
+
+          <div className="queue-actions flex flex-wrap items-center gap-2">
             {!isApproved && (
               <button onClick={approve} disabled={busy !== null} className="btn-primary">
-                <RiCheckLine className="h-4 w-4" />
+                {busy === "approve" ? <RiLoader4Line className="h-4 w-4 animate-spin" /> : <RiCheckLine className="h-4 w-4" />}
                 {busy === "approve" ? "Approving…" : "Approve"}
               </button>
             )}
             {isApproved && emailChannel && (
               <button onClick={sendNow} disabled={busy !== null} className="btn-cta">
-                <RiSendPlaneFill className="h-4 w-4" />
+                {busy === "send" ? <RiLoader4Line className="h-4 w-4 animate-spin" /> : <RiSendPlaneFill className="h-4 w-4" />}
                 {busy === "send" ? "Sending…" : "Send email"}
               </button>
             )}
@@ -232,37 +264,50 @@ export function QueueCard({ lead: initial, onDone }: { lead: Lead; onDone: (id: 
                   <RiFileCopyLine className="h-4 w-4" /> Copy message
                 </button>
                 <button onClick={markContacted} disabled={busy !== null} className="btn-cta">
-                  <RiWhatsappLine className="hidden" />
-                  <RiCheckLine className="h-4 w-4" />
+                  {busy === "contacted" ? <RiLoader4Line className="h-4 w-4 animate-spin" /> : <RiCheckLine className="h-4 w-4" />}
                   {busy === "contacted" ? "Saving…" : "Mark contacted"}
                 </button>
               </>
             )}
             <button onClick={regenerate} disabled={busy !== null} className="btn-ghost">
-              <RiSparkling2Line className={`h-4 w-4 ${busy === "regen" ? "animate-spin" : ""}`} />
+              {busy === "regen" ? <RiLoader4Line className="h-4 w-4 animate-spin" /> : <RiSparkling2Line className="h-4 w-4" />}
               Regenerate
             </button>
-            <button onClick={reject} disabled={busy !== null} className="btn-ghost !text-rose-500 hover:!bg-rose-500/10">
-              <RiCloseLine className="h-4 w-4" /> Reject
+            <button onClick={reject} disabled={busy !== null} className="btn-ghost !border-rose-300 !text-rose-500 hover:!bg-rose-500/10">
+              {busy === "reject" ? <RiLoader4Line className="h-4 w-4 animate-spin" /> : <RiCloseLine className="h-4 w-4" />}
+              Reject
             </button>
-            {dirty && <span className="text-xs font-medium text-cta-500">edited, saved on approve</span>}
+            {lead.followUpAt && (
+              <span className="ml-auto inline-flex items-center gap-1 text-xs text-slate-400">
+                <RiTimeLine /> Follow-up {new Date(lead.followUpAt).toLocaleDateString("en-NG")}
+              </span>
+            )}
           </div>
-        </div>
+        </section>
       </div>
-    </motion.article>
+    </article>
   );
 }
 
 function Chip({ icon, text, link }: { icon: React.ReactNode; text: string; link?: boolean }) {
   return (
     <span
-      className={`inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white/70 px-2.5 py-1.5 font-medium text-slate-600 dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-300 ${
-        link ? "transition hover:border-brand-500 hover:text-brand-600" : ""
+      className={`inline-flex max-w-full items-center gap-1.5 border border-slate-300 bg-white px-2.5 py-1.5 font-semibold text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 ${
+        link ? "hover:border-brand-500 hover:text-brand-600" : ""
       }`}
     >
-      {icon}
-      {text}
+      <span className="shrink-0">{icon}</span>
+      <span className="truncate">{text}</span>
     </span>
+  );
+}
+
+function AuditMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="border-b border-r border-slate-200 p-3 last:border-r-0 dark:border-slate-800">
+      <span className="block text-[10px] font-extrabold uppercase tracking-wider text-slate-400">{label}</span>
+      <span className="mt-1 block font-heading text-base font-extrabold tabular-nums">{value}</span>
+    </div>
   );
 }
 
@@ -274,5 +319,4 @@ function shortUrl(url: string): string {
   }
 }
 
-// Re-export for the queue page refresh icon
-export { RiRefreshLine };
+export { RiTimeLine };
