@@ -1,9 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
-import { motion } from "framer-motion";
-import { RiDeleteBin6Line, RiShieldCheckLine } from "react-icons/ri";
+import { RiDeleteBin6Line, RiShieldCheckLine, RiLoader4Line, RiForbidLine, RiErrorWarningLine } from "react-icons/ri";
 import { api } from "@/lib/api";
 import type { SuppressionEntry } from "@/lib/types";
 
@@ -13,13 +12,14 @@ export default function SuppressionPage() {
   const [entries, setEntries] = useState<SuppressionEntry[] | null>(null);
   const [form, setForm] = useState({ type: "EMAIL", value: "", reason: "" });
   const [busy, setBusy] = useState(false);
+  const [removing, setRemoving] = useState<string | null>(null);
 
   const load = useCallback(() => {
     let cancelled = false;
     api
       .suppression()
-      .then((r) => {
-        if (!cancelled) setEntries(r.items);
+      .then((result) => {
+        if (!cancelled) setEntries(result.items);
       })
       .catch((e: Error) => {
         if (!cancelled) toast.error(e.message);
@@ -31,130 +31,179 @@ export default function SuppressionPage() {
 
   useEffect(load, [load]);
 
-  async function add(e: React.FormEvent) {
-    e.preventDefault();
+  async function add(event: React.FormEvent) {
+    event.preventDefault();
     if (!form.value.trim()) return;
     setBusy(true);
     try {
-      const r = await api.addSuppression(form.type, form.value.trim(), form.reason.trim() || undefined);
+      const result = await api.addSuppression(form.type, form.value.trim(), form.reason.trim() || undefined);
       toast.success(
-        r.affectedLeads > 0 ? `Added, ${r.affectedLeads} existing lead(s) archived` : "Added to suppression list",
+        result.affectedLeads > 0
+          ? `Suppressed and archived ${result.affectedLeads} matching lead${result.affectedLeads === 1 ? "" : "s"}`
+          : "Added to the suppression list",
       );
       setForm({ ...form, value: "", reason: "" });
       load();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to add suppression entry");
     } finally {
       setBusy(false);
     }
   }
 
   async function remove(id: string) {
+    setRemoving(id);
     try {
       await api.deleteSuppression(id);
-      setEntries((prev) => prev?.filter((e) => e._id !== id) ?? null);
-      toast.success("Removed");
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed");
+      setEntries((previous) => previous?.filter((entry) => entry._id !== id) ?? null);
+      toast.success("Suppression entry removed");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to remove entry");
+    } finally {
+      setRemoving(null);
     }
   }
 
+  const typeCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const entry of entries ?? []) counts[entry.type] = (counts[entry.type] ?? 0) + 1;
+    return counts;
+  }, [entries]);
+
   return (
-    <div className="mx-auto max-w-4xl">
-      <motion.header initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}>
-        <h1 className="font-heading text-3xl font-extrabold tracking-tight sm:text-4xl">
-          Suppression{" "}
-          <span className="bg-gradient-to-r from-brand-600 to-purple-600 bg-clip-text text-transparent">list</span>
-        </h1>
-        <p className="mt-1 max-w-2xl text-sm leading-relaxed text-slate-500 dark:text-slate-400">
-          Anyone here is never contacted again, the NDPA right to object, honoured permanently. Adding an entry also
-          archives every matching lead.
-        </p>
-      </motion.header>
-
-      <motion.form
-        initial={{ opacity: 0, y: 16 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.08 }}
-        onSubmit={add}
-        className="glass-card mt-8 flex flex-wrap items-end gap-3 p-5"
-      >
+    <div className="page-shell">
+      <header className="page-header">
         <div>
-          <label className="label">Type</label>
-          <select className="input !w-36" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
-            {TYPES.map((t) => (
-              <option key={t}>{t}</option>
-            ))}
-          </select>
+          <p className="page-kicker">Compliance control</p>
+          <h1 className="page-title">Suppression list</h1>
+          <p className="page-subtitle">
+            Permanently honour opt-outs and prevent matching emails, phones, domains, Instagram accounts, or Place IDs from re-entering outreach.
+          </p>
         </div>
-        <div className="min-w-52 flex-1">
-          <label className="label">Value</label>
-          <input
-            className="input"
-            placeholder="e.g. owner@business.ng, +2348031234567, business.ng, @username"
-            value={form.value}
-            onChange={(e) => setForm({ ...form, value: e.target.value })}
-          />
+        <div className="page-actions">
+          <span className="status-badge border-rose-500 bg-rose-500/5 text-rose-500">
+            <RiForbidLine className="mr-1 h-4 w-4" /> {entries?.length ?? 0} suppressed
+          </span>
         </div>
-        <div className="min-w-40 flex-1">
-          <label className="label">Reason (optional)</label>
-          <input className="input" value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} />
-        </div>
-        <button disabled={busy} className="btn-primary">
-          <RiShieldCheckLine className="h-4 w-4" /> Suppress
-        </button>
-      </motion.form>
+      </header>
 
-      <div className="glass-card mt-6 overflow-x-auto">
-        <table className="w-full min-w-[560px] text-sm">
+      <section className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+        {TYPES.map((type) => (
+          <div key={type} className="metric-card accent-rose !min-h-28">
+            <p className="metric-value !mt-0 !text-2xl">{typeCounts[type] ?? 0}</p>
+            <p className="metric-label">{type.replaceAll("_", " ")}</p>
+          </div>
+        ))}
+      </section>
+
+      <form onSubmit={add} className="panel accent-rose mt-6 border-t-4">
+        <div className="section-heading">
+          <div>
+            <h2 className="section-title">Add a suppression rule</h2>
+            <p className="section-description">Matching existing leads are archived immediately; future discoveries are rejected before storage.</p>
+          </div>
+          <RiShieldCheckLine className="h-5 w-5 text-rose-500" />
+        </div>
+        <div className="grid items-end gap-3 lg:grid-cols-12">
+          <div className="lg:col-span-2">
+            <label className="label" htmlFor="suppression-type">Type</label>
+            <select id="suppression-type" className="input" value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value })}>
+              {TYPES.map((type) => <option key={type}>{type}</option>)}
+            </select>
+          </div>
+          <div className="lg:col-span-5">
+            <label className="label" htmlFor="suppression-value">Value</label>
+            <input
+              id="suppression-value"
+              className="input"
+              placeholder="owner@business.ng, +234…, business.ng, or @username"
+              value={form.value}
+              onChange={(event) => setForm({ ...form, value: event.target.value })}
+            />
+          </div>
+          <div className="lg:col-span-3">
+            <label className="label" htmlFor="suppression-reason">Reason</label>
+            <input
+              id="suppression-reason"
+              className="input"
+              placeholder="Optional compliance note"
+              value={form.reason}
+              onChange={(event) => setForm({ ...form, reason: event.target.value })}
+            />
+          </div>
+          <button disabled={busy || !form.value.trim()} className="btn-danger lg:col-span-2">
+            {busy ? <RiLoader4Line className="h-4 w-4 animate-spin" /> : <RiShieldCheckLine className="h-4 w-4" />}
+            {busy ? "Adding…" : "Suppress"}
+          </button>
+        </div>
+      </form>
+
+      <div className="desktop-table table-shell">
+        <table className="data-table min-w-[720px]">
           <thead>
-            <tr className="border-b border-slate-200/60 text-left text-xs uppercase tracking-wider text-slate-400 dark:border-slate-800/60">
-              <th className="px-5 py-3.5">Type</th>
-              <th className="px-5 py-3.5">Value</th>
-              <th className="px-5 py-3.5">Reason</th>
-              <th className="px-5 py-3.5">Added</th>
-              <th className="px-5 py-3.5" />
-            </tr>
+            <tr><th>Type</th><th>Suppressed value</th><th>Reason</th><th>Source</th><th>Added</th><th aria-label="Remove" /></tr>
           </thead>
           <tbody>
-            {entries?.map((e) => (
-              <tr key={e._id} className="border-b border-slate-100 dark:border-slate-800/40">
-                <td className="px-5 py-3">
-                  <span className="rounded-full bg-slate-500/15 px-2.5 py-1 text-[11px] font-bold text-slate-500">
-                    {e.type}
-                  </span>
-                </td>
-                <td className="px-5 py-3 font-medium">{e.value}</td>
-                <td className="px-5 py-3 text-slate-500">{e.reason ?? ", "}</td>
-                <td className="px-5 py-3 text-xs text-slate-400">{new Date(e.createdAt).toLocaleDateString()}</td>
-                <td className="px-5 py-3 text-right">
+            {entries?.map((entry) => (
+              <tr key={entry._id}>
+                <td><span className="status-badge border-rose-500 bg-rose-500/5 text-rose-500">{entry.type}</span></td>
+                <td className="font-bold">{entry.value}</td>
+                <td className="text-slate-500 dark:text-slate-400">{entry.reason || "No reason provided"}</td>
+                <td className="text-xs capitalize text-slate-500">{entry.source.replaceAll("_", " ").toLowerCase()}</td>
+                <td className="text-xs text-slate-400">{new Date(entry.createdAt).toLocaleDateString("en-NG")}</td>
+                <td className="text-right">
                   <button
-                    onClick={() => remove(e._id)}
-                    className="rounded-lg p-2 text-slate-400 transition hover:bg-rose-500/10 hover:text-rose-500"
-                    title="Remove"
+                    type="button"
+                    onClick={() => remove(entry._id)}
+                    disabled={removing !== null}
+                    className="inline-flex h-10 w-10 items-center justify-center border border-slate-300 text-slate-400 hover:border-rose-500 hover:bg-rose-500/5 hover:text-rose-500 dark:border-slate-700"
+                    title="Remove suppression entry"
                   >
-                    <RiDeleteBin6Line className="h-4 w-4" />
+                    {removing === entry._id ? <RiLoader4Line className="animate-spin" /> : <RiDeleteBin6Line />}
                   </button>
                 </td>
               </tr>
             ))}
+            {!entries && [...Array(5)].map((_, index) => <tr key={index}><td colSpan={6}><div className="skeleton-block h-7" /></td></tr>)}
             {entries && entries.length === 0 && (
-              <tr>
-                <td colSpan={5} className="px-5 py-14 text-center text-slate-400">
-                  Suppression list is empty.
-                </td>
-              </tr>
+              <tr><td colSpan={6} className="py-16 text-center text-slate-400">Suppression list is empty.</td></tr>
             )}
-            {!entries &&
-              [...Array(4)].map((_, i) => (
-                <tr key={i}>
-                  <td colSpan={5} className="px-5 py-4">
-                    <div className="h-6 animate-pulse rounded-lg bg-slate-200 dark:bg-slate-800" />
-                  </td>
-                </tr>
-              ))}
           </tbody>
         </table>
+      </div>
+
+      <div className="mobile-record-list">
+        {!entries && [...Array(4)].map((_, index) => <div key={index} className="skeleton-block mb-3 h-32" />)}
+        {entries?.map((entry) => (
+          <article key={entry._id} className="mobile-record">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <span className="status-badge border-rose-500 bg-rose-500/5 text-rose-500">{entry.type}</span>
+                <h2 className="mt-2 break-all font-heading text-base font-extrabold">{entry.value}</h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => remove(entry._id)}
+                disabled={removing !== null}
+                className="inline-flex h-10 w-10 shrink-0 items-center justify-center border border-slate-300 text-slate-400 hover:border-rose-500 hover:text-rose-500 dark:border-slate-700"
+                aria-label={`Remove ${entry.value}`}
+              >
+                {removing === entry._id ? <RiLoader4Line className="animate-spin" /> : <RiDeleteBin6Line />}
+              </button>
+            </div>
+            <div className="mobile-record-grid">
+              <div><span className="mobile-record-label">Reason</span><span className="text-sm text-slate-600 dark:text-slate-300">{entry.reason || "No reason provided"}</span></div>
+              <div><span className="mobile-record-label">Added</span><span className="text-sm text-slate-600 dark:text-slate-300">{new Date(entry.createdAt).toLocaleDateString("en-NG")}</span></div>
+            </div>
+          </article>
+        ))}
+        {entries && entries.length === 0 && (
+          <div className="empty-state mt-4">
+            <div className="empty-state-icon"><RiErrorWarningLine /></div>
+            <h2 className="mt-4 font-heading text-lg font-extrabold">No suppression rules</h2>
+            <p className="mt-2 text-sm text-slate-500">Opt-outs and manual exclusions will appear here.</p>
+          </div>
+        )}
       </div>
     </div>
   );
