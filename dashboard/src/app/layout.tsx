@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { DM_Sans, Space_Grotesk } from "next/font/google";
 import { Toaster } from "react-hot-toast";
+import { RiLoader4Line } from "react-icons/ri";
 import { Sidebar } from "@/components/Sidebar";
 import { OnboardingGate } from "@/components/OnboardingGate";
 import "./globals.css";
@@ -34,6 +35,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           position="top-right"
           toastOptions={{
             className: "!border !border-slate-700 !bg-slate-900 !text-white dark:!border-slate-200 dark:!bg-white dark:!text-slate-900",
+            loading: {
+              icon: <RiLoader4Line className="h-5 w-5 shrink-0 animate-spin rounded-full" aria-hidden="true" />,
+            },
           }}
         />
       </body>
