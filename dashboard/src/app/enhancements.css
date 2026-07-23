@@ -13,19 +13,73 @@
   background-color: #e11d48;
 }
 
+/*
+ * Symmetry pass
+ *
+ * Page headers and filter toolbars used to compete as sticky layers. Keeping
+ * them in normal document flow prevents them from covering the first panel or
+ * each other, while retaining the fixed mobile application navigation.
+ */
+.page-header {
+  position: relative !important;
+  top: auto !important;
+  z-index: auto !important;
+  align-items: center !important;
+  margin: -1rem -2rem 0 !important;
+  padding: 0.75rem 2rem 1rem !important;
+}
+
+.toolbar {
+  position: relative !important;
+  top: auto !important;
+  z-index: auto !important;
+}
+
+.section-heading {
+  align-items: center !important;
+}
+
+.page-actions,
+.section-heading > :last-child {
+  align-self: center;
+}
+
+/* Buttons, inputs, segmented controls and status badges share one 44px rhythm. */
+.status-badge {
+  min-height: 2.75rem !important;
+  height: 2.75rem;
+  justify-content: center;
+  padding: 0 1rem !important;
+}
+
+.segmented-control,
+.segmented-control button {
+  min-height: 2.75rem !important;
+  height: 2.75rem;
+}
+
+.page-actions > button,
+.page-actions > a,
+.page-actions > .btn,
+.section-heading > .status-badge {
+  min-height: 2.75rem !important;
+  height: 2.75rem;
+}
+
 html[data-route="settings"] .app-main > div {
   max-width: none !important;
   padding-bottom: 7rem;
 }
 
 html[data-route="settings"] .app-main > div > header {
-  position: sticky;
-  top: 0;
-  z-index: 20;
-  margin: -2rem -2rem 0;
-  padding: 1.5rem 2rem 1rem;
+  position: relative;
+  top: auto;
+  z-index: auto;
+  align-items: center !important;
+  margin: -1rem -2rem 0;
+  padding: 0.75rem 2rem 1rem;
   border-bottom: 1px solid rgb(var(--line));
-  background: rgb(var(--page-bg) / 0.97);
+  background: rgb(var(--page-bg));
 }
 
 html[data-route="settings"] .app-main > div > header h1 {
@@ -35,7 +89,7 @@ html[data-route="settings"] .app-main > div > header h1 {
 }
 
 html[data-route="settings"] .app-main section {
-  scroll-margin-top: 7rem;
+  scroll-margin-top: 1rem;
 }
 
 html[data-route="settings"] .app-main section.glass-card {
@@ -71,25 +125,32 @@ html[data-route="settings"] .app-main .fixed.inset-x-0.bottom-0 {
   background: rgb(var(--surface));
 }
 
-@media (max-width: 1023px) {
-  html[data-route="settings"] .app-main > div > header {
-    top: 4rem;
+@media (min-width: 1024px) {
+  .app-main {
+    padding-top: 1rem !important;
   }
 }
 
 @media (max-width: 767px) {
+  .page-header,
   html[data-route="settings"] .app-main > div > header {
-    align-items: flex-start;
+    align-items: flex-start !important;
     flex-direction: column;
-    margin: -1.25rem -1rem 0;
-    padding: 1rem;
+    margin: -1rem -1rem 0 !important;
+    padding: 0.75rem 1rem 1rem !important;
   }
 
+  .page-header .page-actions,
   html[data-route="settings"] .app-main > div > header > div:last-child {
     width: 100%;
   }
 
+  .page-header .page-actions > *,
   html[data-route="settings"] .app-main > div > header > div:last-child > button {
     flex: 1 1 auto;
+  }
+
+  .status-badge {
+    flex: 0 0 auto;
   }
 }
