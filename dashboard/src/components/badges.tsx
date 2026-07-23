@@ -1,36 +1,33 @@
 import type { WebsiteType } from "@/lib/types";
 
 const WEBSITE_TYPE_STYLES: Record<WebsiteType, { label: string; cls: string }> = {
-  NO_WEBSITE: { label: "No website", cls: "bg-rose-500/15 text-rose-600 dark:text-rose-400 ring-rose-500/30" },
-  BROKEN_WEBSITE: { label: "Broken website", cls: "bg-red-500/15 text-red-600 dark:text-red-400 ring-red-500/30" },
-  SHOPIFY: { label: "Shopify", cls: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 ring-emerald-500/30" },
-  LINK_IN_BIO_ONLY: { label: "Link-in-bio only", cls: "bg-amber-500/15 text-amber-600 dark:text-amber-400 ring-amber-500/30" },
-  MENU_PLATFORM_ONLY: { label: "Menu platform", cls: "bg-orange-500/15 text-orange-600 dark:text-orange-400 ring-orange-500/30" },
-  SOCIAL_MEDIA_ONLY: { label: "Social media only", cls: "bg-fuchsia-500/15 text-fuchsia-600 dark:text-fuchsia-400 ring-fuchsia-500/30" },
-  CUSTOM_WEBSITE: { label: "Custom website", cls: "bg-slate-500/15 text-slate-600 dark:text-slate-300 ring-slate-500/30" },
-  POOR_WEBSITE: { label: "Poor website", cls: "bg-yellow-500/15 text-yellow-700 dark:text-yellow-400 ring-yellow-500/30" },
+  NO_WEBSITE: { label: "No website", cls: "border-rose-500 bg-rose-500/5 text-rose-600 dark:text-rose-400" },
+  BROKEN_WEBSITE: { label: "Broken website", cls: "border-red-500 bg-red-500/5 text-red-600 dark:text-red-400" },
+  SHOPIFY: { label: "Shopify", cls: "border-emerald-500 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400" },
+  LINK_IN_BIO_ONLY: { label: "Link-in-bio", cls: "border-amber-500 bg-amber-500/5 text-amber-700 dark:text-amber-400" },
+  MENU_PLATFORM_ONLY: { label: "Menu platform", cls: "border-orange-500 bg-orange-500/5 text-orange-600 dark:text-orange-400" },
+  SOCIAL_MEDIA_ONLY: { label: "Social only", cls: "border-fuchsia-500 bg-fuchsia-500/5 text-fuchsia-600 dark:text-fuchsia-400" },
+  CUSTOM_WEBSITE: { label: "Custom website", cls: "border-slate-400 bg-slate-500/5 text-slate-600 dark:text-slate-300" },
+  POOR_WEBSITE: { label: "Poor website", cls: "border-yellow-500 bg-yellow-500/5 text-yellow-700 dark:text-yellow-400" },
 };
 
 export function WebsiteTypeBadge({ type }: { type: WebsiteType }) {
-  const s = WEBSITE_TYPE_STYLES[type] ?? WEBSITE_TYPE_STYLES.CUSTOM_WEBSITE;
-  return (
-    <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ${s.cls}`}>
-      {s.label}
-    </span>
-  );
+  const style = WEBSITE_TYPE_STYLES[type] ?? WEBSITE_TYPE_STYLES.CUSTOM_WEBSITE;
+  return <span className={`status-badge capitalize ${style.cls}`}>{style.label}</span>;
 }
 
 export function ScoreBadge({ score }: { score: number }) {
   const cls =
     score >= 70
-      ? "from-emerald-500 to-teal-500 shadow-emerald-500/30"
+      ? "border-emerald-600 bg-emerald-600 text-white"
       : score >= 50
-        ? "from-cta-500 to-amber-500 shadow-cta-500/30"
-        : "from-slate-400 to-slate-500 shadow-slate-500/20";
+        ? "border-cta-500 bg-cta-500 text-white"
+        : "border-slate-500 bg-slate-500 text-white";
   return (
     <span
-      className={`inline-flex h-10 min-w-10 items-center justify-center rounded-full bg-gradient-to-br px-2 font-heading text-sm font-bold text-white shadow-lg ${cls}`}
+      className={`inline-flex h-11 min-w-11 shrink-0 items-center justify-center border px-2 font-heading text-sm font-extrabold tabular-nums ${cls}`}
       title={`Lead score: ${score}`}
+      aria-label={`Lead score ${score}`}
     >
       {score}
     </span>
@@ -39,18 +36,22 @@ export function ScoreBadge({ score }: { score: number }) {
 
 export function StagePill({ stage }: { stage: string }) {
   const map: Record<string, string> = {
-    PENDING_APPROVAL: "bg-brand-500/15 text-brand-600 dark:text-brand-500",
-    APPROVED: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
-    REJECTED: "bg-rose-500/15 text-rose-600 dark:text-rose-400",
-    CONTACTED: "bg-purple-500/15 text-purple-600 dark:text-purple-400",
-    DISQUALIFIED: "bg-slate-500/15 text-slate-500",
-    ARCHIVED: "bg-slate-500/15 text-slate-500",
-    DISCOVERED: "bg-cyan-500/15 text-cyan-600 dark:text-cyan-400",
+    PENDING_APPROVAL: "border-brand-500 bg-brand-500/5 text-brand-600 dark:text-brand-400",
+    PITCH_READY: "border-brand-500 bg-brand-500/5 text-brand-600 dark:text-brand-400",
+    APPROVED: "border-emerald-500 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400",
+    REJECTED: "border-rose-500 bg-rose-500/5 text-rose-600 dark:text-rose-400",
+    CONTACTED: "border-purple-500 bg-purple-500/5 text-purple-600 dark:text-purple-400",
+    QUALIFIED: "border-cyan-500 bg-cyan-500/5 text-cyan-600 dark:text-cyan-400",
+    DISQUALIFIED: "border-slate-400 bg-slate-500/5 text-slate-500",
+    ARCHIVED: "border-slate-400 bg-slate-500/5 text-slate-500",
+    DISCOVERED: "border-cyan-500 bg-cyan-500/5 text-cyan-600 dark:text-cyan-400",
+    CHECKED: "border-sky-500 bg-sky-500/5 text-sky-600 dark:text-sky-400",
+    ENRICHED: "border-indigo-500 bg-indigo-500/5 text-indigo-600 dark:text-indigo-400",
+    SCORED: "border-violet-500 bg-violet-500/5 text-violet-600 dark:text-violet-400",
   };
   return (
-    <span
-      className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold tracking-wide ${map[stage] ?? "bg-slate-500/15 text-slate-500"}`}
-    >
+    <span className={`status-badge ${map[stage] ?? "border-slate-400 bg-slate-500/5 text-slate-500"}`}>
+      <span className="status-dot" />
       {stage.replaceAll("_", " ")}
     </span>
   );
