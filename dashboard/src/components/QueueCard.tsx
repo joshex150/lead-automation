@@ -71,6 +71,16 @@ export function QueueCard({
   const routes = contactRoutes(lead);
   const waNumber = whatsappNumber(lead);
 
+  /*
+   * Approving records the decision. It does not finish the lead.
+   *
+   * This used to call onDone for anything that was not an email lead, which
+   * dropped the card the moment the decision was made, while the outreach it
+   * had just authorised had not happened yet: an Instagram lead was approved
+   * and then had nowhere to be messaged from. The card now stays until the work
+   * is genuinely done, which is Send for email and Mark contacted for the
+   * manual channels, and the server keeps it in the queue for the same reason.
+   */
   const approve = () =>
     run(
       "approve",
@@ -79,12 +89,17 @@ export function QueueCard({
         return api.approve(lead._id);
       },
       (result) => {
-        if (result.draft?.draftId) toast.success("Approved. Draft created in Gmail.");
+        if (result.draft?.draftId) toast.success("Approved. Draft created in Gmail, ready to send.");
         else if (result.draft?.internal) toast.success(`Approved. Ready to send via ${result.draft.provider}.`);
         else if (result.draftError) toast.success(`Approved. ${result.draftError}`);
-        else toast.success("Approved");
+        else if (emailChannel) toast.success("Approved. Press Send email to dispatch it.");
+        else toast.success(`Approved. Send the message, then press "Mark contacted".`);
         setLead(result.lead);
-        if (!emailChannel) onDone(lead._id);
+        setSubject(result.lead.pitchSubject ?? subject);
+        setMessage(result.lead.pitchMessage ?? message);
+        // Approving is the moment the card becomes a send instruction, so it
+        // opens itself if the operator had it shut.
+        if (!open) onToggle(lead._id);
       },
     );
 
@@ -183,7 +198,15 @@ export function QueueCard({
           <WebsiteTypeBadge type={lead.websiteType} />
           <MaturityBadge maturity={lead.maturity} newToGoogle={lead.newToGoogle} />
           <SourceBadge source={lead.discoverySource} />
-          {isApproved && <span className="status-badge text-emerald-600">Approved{lead.gmailDraftId ? " · draft ready" : ""}</span>}
+          {isApproved && (
+            <span className="status-badge text-emerald-600">
+              {emailChannel
+                ? lead.gmailDraftId
+                  ? "Approved · draft ready to send"
+                  : "Approved · ready to send"
+                : "Approved · waiting to be sent"}
+            </span>
+          )}
         </div>
       </div>
 
@@ -295,10 +318,29 @@ export function QueueCard({
               </p>
             )}
 
+            {/*
+              The one step left, said outright. An approved lead is half-done
+              work, and the difference between that and finished is the single
+              most expensive thing to get wrong here: a pitch nobody sent.
+            */}
+            {isApproved && (
+              <p className="mb-4 break-words border border-emerald-500/30 bg-emerald-500/5 p-3 text-xs leading-relaxed text-emerald-700 [overflow-wrap:anywhere] dark:text-emerald-400">
+                {emailChannel
+                  ? "Approved. Nothing has been sent yet: press Send email below to dispatch it. This lead stays here until you do."
+                  : `Approved. Open ${CHANNEL_LABELS[channel]}, send the message, then press "Mark contacted". This lead stays here until you do.`}
+              </p>
+            )}
+
             {channel === "NONE" && (
               <p className="mb-4 break-words border border-rose-500/30 bg-rose-500/5 p-3 text-xs leading-relaxed text-rose-600 [overflow-wrap:anywhere] dark:text-rose-400">
-                No email, Instagram handle or mobile number was found for this business, so there is nowhere to send this
-                message yet. Add a contact on the lead page, or open it on Google Maps and check its listing.
+                {/*
+                  An address that bounced is not an address that was never
+                  found, and telling the operator to go looking for one they
+                  already have sends them round the same loop again.
+                */}
+                {(lead.bouncedEmails?.length ?? 0) > 0
+                  ? `The only address we had for this business bounced (${lead.bouncedEmails?.join(", ")}), and there is no handle or mobile number either, so there is nowhere to send this message. Add a working contact on the lead page, or open it on Google Maps and check its listing.`
+                  : "No email, Instagram handle or mobile number was found for this business, so there is nowhere to send this message yet. Add a contact on the lead page, or open it on Google Maps and check its listing."}
               </p>
             )}
 
@@ -334,7 +376,14 @@ export function QueueCard({
             </div>
 
             <div className="queue-actions flex flex-wrap items-center gap-2">
-              {!isApproved && (
+              {/*
+                Nothing to approve when there is nowhere to send it. Approving a
+                lead with no route recorded a decision that authorised an
+                outreach that could never happen, and the lead then sat in the
+                queue in a state with no next step at all. Add a contact on the
+                lead page and it comes back as ordinary work.
+              */}
+              {!isApproved && channel !== "NONE" && (
                 <button onClick={approve} disabled={busy !== null} className="btn-primary">
                   {busy === "approve" ? <RiLoader4Line className="h-4 w-4 animate-spin" /> : <RiCheckLine className="h-4 w-4" />}
                   {busy === "approve" ? "Approving…" : "Approve"}

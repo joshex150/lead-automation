@@ -53,6 +53,8 @@ type Filters = {
   search: string;
   websiteType: string;
   stage: string;
+  /** Carried so a link from the overview funnel reproduces the figure it showed. */
+  approvalStatus: string;
   outreachStatus: string;
   contactable: string;
   maturity: string;
@@ -77,6 +79,7 @@ const DEFAULT_FILTERS: Filters = {
   search: "",
   websiteType: "",
   stage: "",
+  approvalStatus: "",
   outreachStatus: "",
   contactable: "",
   maturity: "",
@@ -101,6 +104,7 @@ const FILTER_LABELS: Record<keyof Omit<Filters, "sort">, string> = {
   search: "Search",
   websiteType: "Website",
   stage: "Stage",
+  approvalStatus: "Approval",
   outreachStatus: "Outreach",
   contactable: "Contact",
   maturity: "Maturity",

@@ -58,7 +58,9 @@ leadsRouter.get(
 
     const filter: Record<string, unknown> = {};
     if (q.stage) filter.pipelineStage = { $in: q.stage.split(",") };
-    if (q.approvalStatus) filter["approval.status"] = q.approvalStatus;
+    // Comma separated like the rest, so the approval queue can ask for
+    // "awaiting a decision or awaiting a send" in one request.
+    if (q.approvalStatus) filter["approval.status"] = { $in: q.approvalStatus.split(",") };
     if (q.outreachStatus) filter.outreachStatus = { $in: q.outreachStatus.split(",") };
     if (q.websiteType) filter.websiteType = { $in: q.websiteType.split(",") };
     if (q.city) filter.city = q.city;
@@ -256,6 +258,25 @@ leadsRouter.patch(
       }
     }
 
+    const contactChanged =
+      body.email !== undefined || body.phone !== undefined || body.instagramUsername !== undefined;
+
+    /*
+     * A contact added by hand takes effect now, not on the next scan.
+     *
+     * Every no-route lead in the queue is told to "add a contact on the lead
+     * page", and doing so used to change nothing visible: the channel is what
+     * decides where a lead appears and whether it can be sent, and it was only
+     * recalculated by the pipeline's own repair sweep, which runs when leads
+     * are next processed. So the operator did exactly what they were asked and
+     * the lead stayed unreachable until some later scan. An explicit channel in
+     * the same request still wins, because that is somebody overriding the rule
+     * on purpose.
+     */
+    if (contactChanged && body.outreachChannel === undefined) {
+      assignChannel(lead);
+    }
+
     // Re-score if signal fields changed.
     if (
       body.email !== undefined ||
@@ -432,6 +453,20 @@ leadsRouter.post(
     lead.outreachChannel = channel;
     lead.outreachStatus = "CONTACTED";
     lead.pipelineStage = "CONTACTED";
+    /*
+     * Sending the message is the approval decision, so record it as one.
+     *
+     * The manual channels hand the operator the message and ask them to press
+     * "Mark contacted" afterwards, and they can reasonably do that without
+     * pressing Approve first. The lead was then a contacted business whose
+     * approval was still marked as pending for good: an audit trail that says
+     * nobody ever agreed to send a message that demonstrably went out.
+     */
+    if (lead.approval.status === "PENDING" || lead.approval.status === "NONE") {
+      lead.approval.status = "APPROVED";
+      lead.approval.reviewedAt = new Date();
+      lead.approval.reviewedBy = lead.approval.reviewedBy ?? "dashboard";
+    }
     lead.timesContacted += 1;
     lead.lastContactedAt = now;
     lead.followUpAt = new Date(now.getTime() + settings.followUpDays * 24 * 60 * 60 * 1000);
@@ -484,7 +519,54 @@ leadsRouter.post(
     } else if (status === "NEGATIVE") {
       lead.outreachStatus = "NOT_INTERESTED";
     } else if (status === "BOUNCED") {
+      /*
+       * A bounce means nobody read it. The lead is unworked, not finished.
+       *
+       * This used to set the status back to NOT_CONTACTED and stop there, which
+       * left the lead in a corner nothing could reach: still approved, still at
+       * the CONTACTED stage, counted as neither contacted nor waiting, holding
+       * an address already proven dead. It appeared in no list and no figure,
+       * and the one thing that was actually true of it, that a real business
+       * still needs a website and we simply have the wrong address, was the one
+       * thing nothing said.
+       *
+       * So: retire the address, look for another way in, and put the lead back
+       * in front of the operator. If the only route was that address it lands
+       * under "No route" in the queue, which is where every other lead with
+       * nothing to send to already is.
+       */
+      if (lead.email) {
+        const dead = lead.email.toLowerCase();
+        if (!lead.bouncedEmails.includes(dead)) lead.bouncedEmails.push(dead);
+        lead.set("email", undefined);
+        lead.emailConfidence = 0;
+        lead.emailAssessment = "Delivery bounced, so this address does not reach the business.";
+      }
+      // The send never arrived, so it does not count against the attempts the
+      // follow-up policy allows.
+      lead.timesContacted = Math.max(0, lead.timesContacted - 1);
+      lead.gmailDraftId = undefined;
+      lead.gmailMessageId = undefined;
+      lead.gmailThreadId = undefined;
+      assignChannel(lead);
       lead.outreachStatus = "NOT_CONTACTED";
+      /*
+       * A bounce is not a reply from the business, so it must not be held
+       * against them as one. The follow-up engine only writes to leads whose
+       * response status is NONE, so leaving BOUNCED on the record exempted the
+       * lead from every future follow-up even after a working address was
+       * found: silently, and for good. What actually happened is kept in
+       * `bouncedEmails` and in the outreach log, which is where it belongs.
+       */
+      lead.responseStatus = "NONE";
+      lead.respondedAt = undefined;
+      // Only back into the queue if there is still a message to send. A lead
+      // that never had one is left for draftPendingPitches to finish.
+      if (lead.pitchMessage) {
+        lead.pipelineStage = "PENDING_APPROVAL";
+        lead.approval.status = "PENDING";
+        lead.approval.reviewedAt = undefined;
+      }
     } else {
       lead.outreachStatus = "RESPONDED";
     }
@@ -546,9 +628,37 @@ leadsRouter.post(
     const lead = await loadLead(req.params.id);
     if (!lead) return res.status(404).json({ error: "Lead not found" });
     if (lead.optedOut) return res.status(409).json({ error: "Lead has opted out" });
-    // Reset to DISCOVERED semantics for processing, preserving CRM fields.
-    const outcome = await processLead(lead);
-    res.json({ lead: await Lead.findById(lead._id), outcome });
+
+    /*
+     * A re-check refreshes the audit. It does not reopen a decision.
+     *
+     * Running the whole flow ends by writing a new pitch and setting the lead
+     * back to PENDING_APPROVAL, so pressing this on a lead that had been
+     * approved, sent to, or converted put it back in the approval queue with
+     * the message that was actually sent replaced by a fresh one. The website
+     * check, the enrichment and the score are still brought up to date.
+     */
+    const actioned =
+      lead.approval.status === "APPROVED" ||
+      lead.approval.status === "REJECTED" ||
+      (lead.outreachStatus !== "NOT_CONTACTED" && lead.outreachStatus !== "DRAFT_CREATED");
+    const outcome = await processLead(lead, undefined, { keepOutreachState: actioned });
+
+    /*
+     * A lead that processes cleanly is no longer a failing lead.
+     *
+     * Three failures take a lead out of every retry the pipeline runs, and
+     * nothing put it back. Re-check is the operator saying "try this one
+     * again", so clearing the tally is what makes it mean that: without it a
+     * lead that failed while the AI provider was down stayed excluded from
+     * every future run even after the provider came back.
+     */
+    await Lead.updateOne(
+      { _id: lead._id },
+      { $unset: { lastProcessingError: 1 }, $set: { processingAttempts: 0 } },
+    );
+
+    res.json({ lead: await Lead.findById(lead._id), outcome, outreachStatePreserved: actioned });
   }),
 );
 

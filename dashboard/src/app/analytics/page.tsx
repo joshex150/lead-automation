@@ -24,6 +24,40 @@ const WINDOWS = [
   ["all", "All time"],
 ] as const;
 
+type RunTotals = { found: number; created: number; duplicates: number; suppressed: number; processed: number; qualified: number };
+
+/**
+ * Read a run's figures without assuming they are there.
+ *
+ * Every other place that reads a run does this, because a payload from an older
+ * deployment can arrive without the sub-document and an unguarded read takes the
+ * whole page down over a missing number.
+ */
+function runTotals(run: AnalyticsStats["recentRuns"][number]): RunTotals {
+  const t = run.totals ?? ({} as Partial<RunTotals>);
+  return {
+    found: t.found ?? 0,
+    created: t.created ?? 0,
+    duplicates: t.duplicates ?? 0,
+    suppressed: t.suppressed ?? 0,
+    processed: t.processed ?? 0,
+    qualified: t.qualified ?? 0,
+  };
+}
+
+/**
+ * Yield, or nothing when there is no yield to report.
+ *
+ * Dividing by max(processed, 1) turned "this run discovered but did not
+ * process" into a confident 0%, which reads as a run that found nothing worth
+ * having. A discovery-only run and a resume both legitimately leave these at
+ * zero, and the honest answer there is that it was not measured.
+ */
+function yieldOf(t: RunTotals): string {
+  if (t.processed <= 0) return "—";
+  return `${Math.round((t.qualified / t.processed) * 100)}%`;
+}
+
 export default function AnalyticsPage() {
   const [days, setDays] = useState<number | "all">(30);
   const [stats, setStats] = useState<AnalyticsStats | null>(null);
@@ -216,17 +250,17 @@ export default function AnalyticsPage() {
                     <thead><tr><th>Run</th><th>Found</th><th>Created</th><th>Duplicates</th><th>Suppressed</th><th>Processed</th><th>Qualified</th><th>Yield</th></tr></thead>
                     <tbody>
                       {stats.recentRuns.map((run) => {
-                        const rate = Math.round((run.totals.qualified / Math.max(run.totals.processed, 1)) * 100);
+                        const t = runTotals(run);
                         return (
                           <tr key={run._id}>
                             <td><strong>{new Date(run.startedAt).toLocaleDateString("en-NG")}</strong><p className="text-[11px] uppercase text-slate-400">{run.trigger} · {run.status}</p></td>
-                            <td>{run.totals.found.toLocaleString()}</td>
-                            <td>{run.totals.created.toLocaleString()}</td>
-                            <td>{run.totals.duplicates.toLocaleString()}</td>
-                            <td>{run.totals.suppressed.toLocaleString()}</td>
-                            <td>{run.totals.processed.toLocaleString()}</td>
-                            <td>{run.totals.qualified.toLocaleString()}</td>
-                            <td className="font-bold">{rate}%</td>
+                            <td>{t.found.toLocaleString()}</td>
+                            <td>{t.created.toLocaleString()}</td>
+                            <td>{t.duplicates.toLocaleString()}</td>
+                            <td>{t.suppressed.toLocaleString()}</td>
+                            <td>{t.processed.toLocaleString()}</td>
+                            <td>{t.qualified.toLocaleString()}</td>
+                            <td className="font-bold">{yieldOf(t)}</td>
                           </tr>
                         );
                       })}
@@ -234,20 +268,23 @@ export default function AnalyticsPage() {
                   </table>
                 </div>
                 <div className="mobile-record-list">
-                  {stats.recentRuns.map((run) => (
-                    <article key={run._id} className="mobile-record">
-                      <div className="flex items-center justify-between gap-3">
-                        <strong>{new Date(run.startedAt).toLocaleDateString("en-NG")}</strong>
-                        <span className="status-badge text-cta-500">{Math.round((run.totals.qualified / Math.max(run.totals.processed, 1)) * 100)}% yield</span>
-                      </div>
-                      <div className="mobile-record-grid">
-                        <RunMetric label="Found" value={run.totals.found} />
-                        <RunMetric label="Created" value={run.totals.created} />
-                        <RunMetric label="Processed" value={run.totals.processed} />
-                        <RunMetric label="Qualified" value={run.totals.qualified} />
-                      </div>
-                    </article>
-                  ))}
+                  {stats.recentRuns.map((run) => {
+                    const t = runTotals(run);
+                    return (
+                      <article key={run._id} className="mobile-record">
+                        <div className="flex items-center justify-between gap-3">
+                          <strong>{new Date(run.startedAt).toLocaleDateString("en-NG")}</strong>
+                          <span className="status-badge text-cta-500">{yieldOf(t)} yield</span>
+                        </div>
+                        <div className="mobile-record-grid">
+                          <RunMetric label="Found" value={t.found} />
+                          <RunMetric label="Created" value={t.created} />
+                          <RunMetric label="Processed" value={t.processed} />
+                          <RunMetric label="Qualified" value={t.qualified} />
+                        </div>
+                      </article>
+                    );
+                  })}
                 </div>
               </>
             )}

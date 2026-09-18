@@ -985,3 +985,432 @@ describe("erasing working data", () => {
     expect(await Suppression.countDocuments()).toBe(0);
   });
 });
+
+/*
+ * The approval queue is one set of leads, counted once.
+ *
+ * Each of these covers a way the queue used to lose work or misreport it: an
+ * approved lead vanishing before it could be sent, a tally that counted leads
+ * the list did not show, and a funnel whose steps grew as they went down.
+ */
+describe("approval queue: work stays visible until it is finished", () => {
+  beforeEach(async () => {
+    await Promise.all([Lead.deleteMany({}), OutreachLog.deleteMany({})]);
+  });
+
+  /** A lead sitting in the queue exactly as the pipeline leaves it. */
+  const queued = (overrides: Record<string, unknown> = {}) =>
+    makeLead({
+      pipelineStage: "PENDING_APPROVAL",
+      approval: { status: "PENDING" },
+      outreachStatus: "NOT_CONTACTED",
+      outreachChannel: "EMAIL",
+      email: "hello@crystalscents.ng",
+      pitchSubject: "Your website",
+      pitchMessage: "A short, specific note about the website.",
+      needScore: 70,
+      leadScore: 70,
+      priorityScore: 70,
+      ...overrides,
+    });
+
+  const queueRequest = () =>
+    request(app)
+      .get("/api/leads")
+      .query({
+        approvalStatus: "PENDING,APPROVED",
+        stage: "PENDING_APPROVAL,APPROVED",
+        outreachStatus: "NOT_CONTACTED,DRAFT_CREATED",
+        hasPitch: "true",
+        channel: "EMAIL,INSTAGRAM_MANUAL,WHATSAPP",
+        limit: 100,
+      });
+
+  it("keeps an approved email lead in the queue so it can still be sent", async () => {
+    const lead = await queued();
+
+    const before = await queueRequest();
+    expect(before.body.items.map((l: { _id: string }) => l._id)).toContain(String(lead._id));
+
+    const approve = await request(app).post(`/api/leads/${lead._id}/approve`).send({});
+    expect(approve.status).toBe(200);
+    expect(approve.body.lead.approval.status).toBe("APPROVED");
+
+    // This is the regression: the lead used to drop out here, taking the only
+    // Send button in the application with it.
+    const after = await queueRequest();
+    expect(after.body.items.map((l: { _id: string }) => l._id)).toContain(String(lead._id));
+  });
+
+  it("keeps an approved Instagram lead until it is marked contacted", async () => {
+    const lead = await queued({
+      outreachChannel: "INSTAGRAM_MANUAL",
+      email: undefined,
+      instagramUsername: "crystalscents",
+      pitchSubject: undefined,
+    });
+
+    await request(app).post(`/api/leads/${lead._id}/approve`).send({});
+    const afterApproval = await queueRequest();
+    expect(afterApproval.body.items.map((l: { _id: string }) => l._id)).toContain(String(lead._id));
+
+    const contacted = await request(app)
+      .post(`/api/leads/${lead._id}/mark-contacted`)
+      .send({ channel: "INSTAGRAM_MANUAL" });
+    expect(contacted.status).toBe(200);
+    // Sending it is the decision, so the record says a decision was taken.
+    expect(contacted.body.lead.approval.status).toBe("APPROVED");
+
+    const afterContact = await queueRequest();
+    expect(afterContact.body.items.map((l: { _id: string }) => l._id)).not.toContain(String(lead._id));
+  });
+
+  it("a rejected lead leaves the queue", async () => {
+    const lead = await queued();
+    await request(app).post(`/api/leads/${lead._id}/reject`).send({});
+    const after = await queueRequest();
+    expect(after.body.items.map((l: { _id: string }) => l._id)).not.toContain(String(lead._id));
+  });
+
+  it("the queue tally, the badge figure and the list itself are one number", async () => {
+    await queued();
+    await queued({ googlePlaceId: `place-${Math.random()}`, businessNameNormalized: "second" });
+    // Opted out: counted by the old tally, never shown by the list.
+    await queued({ googlePlaceId: `place-${Math.random()}`, businessNameNormalized: "third", optedOut: true });
+    // No contact route: its own tab, and deliberately not part of "All".
+    await queued({
+      googlePlaceId: `place-${Math.random()}`,
+      businessNameNormalized: "fourth",
+      outreachChannel: "NONE",
+      email: undefined,
+    });
+
+    const [stats, list] = await Promise.all([request(app).get("/api/stats"), queueRequest()]);
+    expect(stats.status).toBe(200);
+    expect(list.body.total).toBe(2);
+    expect(stats.body.totals.pendingApproval).toBe(list.body.total);
+
+    const byChannel = stats.body.queueByChannel;
+    const allTabs = (byChannel.EMAIL ?? 0) + (byChannel.INSTAGRAM_MANUAL ?? 0) + (byChannel.WHATSAPP ?? 0);
+    expect(allTabs).toBe(list.body.total);
+    expect(byChannel.NONE ?? 0).toBe(1);
+  });
+
+  it("a qualified lead with no message yet is not advertised as queue work", async () => {
+    await queued({ pipelineStage: "QUALIFIED", approval: { status: "NONE" }, pitchMessage: "" });
+    const stats = await request(app).get("/api/stats");
+    expect(stats.body.totals.pendingApproval).toBe(0);
+  });
+});
+
+describe("overview funnel arithmetic", () => {
+  beforeEach(async () => {
+    await Promise.all([Lead.deleteMany({}), OutreachLog.deleteMany({})]);
+  });
+
+  it("never widens as it goes down, however far a lead has travelled", async () => {
+    const settings = await getSettings();
+    const base = {
+      needScore: settings.scoreThreshold + 10,
+      leadScore: settings.scoreThreshold + 10,
+      pitchMessage: "A note.",
+      outreachChannel: "EMAIL",
+      email: "a@b.ng",
+    };
+    // One lead at each point of the journey, including the far end. The far
+    // end is what used to break it: a converted lead is no longer "interested"
+    // and no longer "contacted", so the middle of the funnel read as empty.
+    await makeLead({ ...base, googlePlaceId: "f1", pipelineStage: "PENDING_APPROVAL", approval: { status: "PENDING" } });
+    await makeLead({
+      ...base,
+      googlePlaceId: "f2",
+      businessNameNormalized: "f2",
+      pipelineStage: "APPROVED",
+      approval: { status: "APPROVED" },
+    });
+    await makeLead({
+      ...base,
+      googlePlaceId: "f3",
+      businessNameNormalized: "f3",
+      pipelineStage: "CONTACTED",
+      approval: { status: "APPROVED" },
+      outreachStatus: "CONVERTED",
+      estimatedDealValue: 400000,
+    });
+
+    const res = await request(app).get("/api/stats");
+    const t = res.body.totals;
+    expect(t.discovered).toBeGreaterThanOrEqual(t.qualified);
+    expect(t.qualified).toBeGreaterThanOrEqual(t.approved);
+    expect(t.approved).toBeGreaterThanOrEqual(t.contacted);
+    expect(t.contacted).toBeGreaterThanOrEqual(t.interested);
+    expect(t.interested).toBeGreaterThanOrEqual(t.converted);
+    expect(t.converted).toBe(1);
+    // The converted lead is still counted everywhere above it.
+    expect(t.contacted).toBe(1);
+    expect(t.interested).toBe(1);
+  });
+
+  it("leaves opted-out businesses out of the funnel but still tracks them", async () => {
+    await makeLead({ googlePlaceId: "o1", optedOut: true, outreachStatus: "DO_NOT_CONTACT" });
+    const res = await request(app).get("/api/stats");
+    expect(res.body.totals.total).toBe(1);
+    expect(res.body.totals.discovered).toBe(0);
+    expect(res.body.totals.optedOut).toBe(1);
+  });
+});
+
+describe("re-checking a lead that has already been actioned", () => {
+  beforeEach(async () => {
+    await Promise.all([Lead.deleteMany({}), OutreachLog.deleteMany({})]);
+  });
+
+  it("refreshes the audit without pulling a converted client back into the queue", async () => {
+    const lead = await makeLead({
+      googlePlaceId: "recheck-1",
+      pipelineStage: "CONTACTED",
+      approval: { status: "APPROVED" },
+      outreachStatus: "CONVERTED",
+      outreachChannel: "EMAIL",
+      email: "owner@crystalscents.ng",
+      pitchSubject: "Your website",
+      pitchMessage: "The message that was actually sent.",
+      estimatedDealValue: 500000,
+    });
+
+    const res = await request(app).post(`/api/leads/${lead._id}/recheck`).send({});
+    expect(res.status).toBe(200);
+    expect(res.body.outreachStatePreserved).toBe(true);
+
+    const after = await Lead.findById(lead._id);
+    expect(after?.pipelineStage).toBe("CONTACTED");
+    expect(after?.approval.status).toBe("APPROVED");
+    expect(after?.outreachStatus).toBe("CONVERTED");
+    // The sent message is history, not a draft to be overwritten.
+    expect(after?.pitchMessage).toBe("The message that was actually sent.");
+    // The point of the re-check still happened.
+    expect(after?.scoredAt).toBeTruthy();
+  });
+
+  it("still runs the whole flow for a lead nobody has acted on", async () => {
+    const lead = await makeLead({ googlePlaceId: "recheck-2", pipelineStage: "DISCOVERED" });
+    const res = await request(app).post(`/api/leads/${lead._id}/recheck`).send({});
+    expect(res.status).toBe(200);
+    expect(res.body.outreachStatePreserved).toBe(false);
+    const after = await Lead.findById(lead._id);
+    expect(after?.pipelineStage).not.toBe("DISCOVERED");
+  });
+});
+
+describe("leads that stopped moving are still reported", () => {
+  beforeEach(async () => {
+    await Lead.deleteMany({});
+  });
+
+  it("counts leads nothing retries any more, and a re-check puts one back in circulation", async () => {
+    const lead = await makeLead({
+      googlePlaceId: "stalled-1",
+      pipelineStage: "DISCOVERED",
+      processingAttempts: 3,
+      lastProcessingError: "AI provider unavailable",
+    });
+
+    const before = await request(app).get("/api/pipeline/jobs/status");
+    expect(before.status).toBe(200);
+    expect(before.body.stalledLeads).toBe(1);
+    // It is deliberately absent from the button that offers to process leads,
+    // because that button cannot finish it. That is why it needs its own count.
+    expect(before.body.discoveredPending).toBe(0);
+
+    const recheck = await request(app).post(`/api/leads/${lead._id}/recheck`).send({});
+    expect(recheck.status).toBe(200);
+
+    const after = await request(app).get("/api/pipeline/jobs/status");
+    expect(after.body.stalledLeads).toBe(0);
+    const reloaded = await Lead.findById(lead._id);
+    expect(reloaded?.processingAttempts).toBe(0);
+    expect(reloaded?.lastProcessingError).toBeFalsy();
+  });
+});
+
+describe("a bounced email leaves the lead workable", () => {
+  beforeEach(async () => {
+    await Promise.all([Lead.deleteMany({}), OutreachLog.deleteMany({})]);
+  });
+
+  const contacted = (overrides: Record<string, unknown> = {}) =>
+    makeLead({
+      googlePlaceId: `bounce-${Math.random().toString(36).slice(2)}`,
+      pipelineStage: "CONTACTED",
+      approval: { status: "APPROVED" },
+      outreachStatus: "CONTACTED",
+      outreachChannel: "EMAIL",
+      email: "wrong@crystalscents.ng",
+      pitchSubject: "Your website",
+      pitchMessage: "A short, specific note.",
+      timesContacted: 1,
+      needScore: 70,
+      leadScore: 70,
+      ...overrides,
+    });
+
+  it("retires the dead address and re-routes the lead to a channel that works", async () => {
+    const lead = await contacted({ instagramUsername: "crystalscents" });
+
+    const res = await request(app).post(`/api/leads/${lead._id}/response`).send({ status: "BOUNCED" });
+    expect(res.status).toBe(200);
+
+    const after = await Lead.findById(lead._id);
+    expect(after?.email).toBeFalsy();
+    expect(after?.bouncedEmails).toContain("wrong@crystalscents.ng");
+    // There is another way in, so the lead is work again rather than a dead end.
+    expect(after?.outreachChannel).toBe("INSTAGRAM_MANUAL");
+    expect(after?.pipelineStage).toBe("PENDING_APPROVAL");
+    expect(after?.approval.status).toBe("PENDING");
+    // The message never arrived, so it does not count against the attempts
+    // the follow-up policy allows, and the bounce is not held against the
+    // business as if they had replied.
+    expect(after?.timesContacted).toBe(0);
+    expect(after?.responseStatus).toBe("NONE");
+
+    const queue = await request(app).get("/api/leads").query({
+      approvalStatus: "PENDING,APPROVED",
+      stage: "PENDING_APPROVAL,APPROVED",
+      outreachStatus: "NOT_CONTACTED,DRAFT_CREATED",
+      hasPitch: "true",
+      channel: "EMAIL,INSTAGRAM_MANUAL,WHATSAPP",
+    });
+    expect(queue.body.items.map((l: { _id: string }) => l._id)).toContain(String(lead._id));
+  });
+
+  it("with no other route it lands under 'no route' rather than vanishing", async () => {
+    const lead = await contacted({ phone: undefined });
+
+    await request(app).post(`/api/leads/${lead._id}/response`).send({ status: "BOUNCED" });
+
+    const after = await Lead.findById(lead._id);
+    expect(after?.outreachChannel).toBe("NONE");
+    expect(after?.pipelineStage).toBe("PENDING_APPROVAL");
+
+    const stats = await request(app).get("/api/stats");
+    expect(stats.body.queueByChannel.NONE).toBe(1);
+    // Not counted as contacted: nobody read it.
+    expect(stats.body.totals.contacted).toBe(0);
+  });
+
+  it("does not let enrichment put the same dead address back on the lead", async () => {
+    const lead = await contacted();
+    await request(app).post(`/api/leads/${lead._id}/response`).send({ status: "BOUNCED" });
+
+    // A corrected address typed by hand is accepted, and takes effect at once.
+    const patched = await request(app)
+      .patch(`/api/leads/${lead._id}`)
+      .send({ email: "owner@crystalscents.ng" });
+    expect(patched.status).toBe(200);
+    expect(patched.body.lead.outreachChannel).toBe("EMAIL");
+
+    const after = await Lead.findById(lead._id);
+    expect(after?.bouncedEmails).toContain("wrong@crystalscents.ng");
+  });
+});
+
+describe("adding a contact by hand restores the route immediately", () => {
+  beforeEach(async () => {
+    await Lead.deleteMany({});
+  });
+
+  it("moves a lead out of 'no route' as soon as an address is added", async () => {
+    const lead = await makeLead({
+      googlePlaceId: "noroute-1",
+      phone: undefined,
+      pipelineStage: "PENDING_APPROVAL",
+      approval: { status: "PENDING" },
+      outreachChannel: "NONE",
+      pitchMessage: "A short, specific note.",
+      needScore: 70,
+      leadScore: 70,
+    });
+
+    const res = await request(app).patch(`/api/leads/${lead._id}`).send({ email: "hello@crystalscents.ng" });
+    expect(res.status).toBe(200);
+    expect(res.body.lead.outreachChannel).toBe("EMAIL");
+
+    const stats = await request(app).get("/api/stats");
+    expect(stats.body.totals.pendingApproval).toBe(1);
+    expect(stats.body.queueByChannel.NONE ?? 0).toBe(0);
+  });
+
+  it("an explicit channel in the same request still wins", async () => {
+    const lead = await makeLead({ googlePlaceId: "noroute-2", outreachChannel: "NONE" });
+    const res = await request(app)
+      .patch(`/api/leads/${lead._id}`)
+      .send({ email: "hello@crystalscents.ng", outreachChannel: "WHATSAPP" });
+    expect(res.body.lead.outreachChannel).toBe("WHATSAPP");
+  });
+});
+
+describe("today's sending budget is reported before it is spent", () => {
+  beforeEach(async () => {
+    await Promise.all([Lead.deleteMany({}), OutreachLog.deleteMany({})]);
+  });
+
+  it("counts against the configured cap", async () => {
+    const settings = await getSettings();
+    const lead = await makeLead({ googlePlaceId: "cap-1" });
+    await OutreachLog.create({ leadId: lead._id, channel: "EMAIL", direction: "OUTBOUND", action: "SENT" });
+
+    const res = await request(app).get("/api/stats");
+    expect(res.body.email.dailyCap).toBe(settings.dailyEmailCap);
+    expect(res.body.email.sentToday).toBe(1);
+    expect(res.body.email.remaining).toBe(Math.max(0, settings.dailyEmailCap - 1));
+  });
+});
+
+describe("the attempt limit means the same thing everywhere", () => {
+  beforeEach(async () => {
+    await Lead.deleteMany({});
+  });
+
+  it("a lead that has failed three times is not picked up by a processing run", async () => {
+    const stalled = await makeLead({
+      googlePlaceId: "limit-1",
+      pipelineStage: "DISCOVERED",
+      processingAttempts: 3,
+      lastProcessingError: "boom",
+    });
+
+    const res = await request(app).post("/api/pipeline/process").send({});
+    expect(res.status).toBe(200);
+    // Untouched: the dashboard says these are no longer retried, so they must
+    // not be, or every run spends its budget on leads that cannot succeed.
+    expect(res.body.processed).toBe(0);
+    const after = await Lead.findById(stalled._id);
+    expect(after?.pipelineStage).toBe("DISCOVERED");
+  });
+});
+
+describe("importing while the pipeline is busy", () => {
+  beforeEach(async () => {
+    await Promise.all([Lead.deleteMany({}), PipelineLease.deleteMany({})]);
+  });
+
+  afterAll(async () => {
+    if (dbAvailable) await PipelineLease.deleteMany({});
+  });
+
+  it("saves the leads and says so, rather than failing the whole import", async () => {
+    // A scan holding the processing lease is the ordinary case: the operator
+    // pastes a list while the morning run is still going.
+    await PipelineLease.create({ _id: "processing", owner: "someone-else", expiresAt: new Date(Date.now() + 60_000) });
+
+    const res = await request(app)
+      .post("/api/pipeline/import")
+      .send({ items: [{ businessName: "Busy Import Co", city: "Lagos", email: "hi@busyimport.ng" }] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.created).toBe(1);
+    // The audit could not start, and that is reported beside the import.
+    expect(res.body.processingError).toBeTruthy();
+    expect(await Lead.countDocuments({ businessName: "Busy Import Co" })).toBe(1);
+  });
+});

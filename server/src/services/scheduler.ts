@@ -2,7 +2,7 @@ import cron, { type ScheduledTask } from "node-cron";
 import { logger } from "../utils/logger.js";
 import { getSettings } from "../models/Settings.js";
 import { getPlacesKey, getSchedulerRuntime, getSourcesRuntime, type ResolvedScheduler } from "../config/runtime.js";
-import { runFullPipeline } from "./pipeline/runPipeline.js";
+import { startPipelineJob } from "./pipeline/backgroundJobs.js";
 import { runFollowUps } from "./outreach/followUp.js";
 
 /**
@@ -15,15 +15,22 @@ import { runFollowUps } from "./outreach/followUp.js";
 
 let tasks: ScheduledTask[] = [];
 let active: ResolvedScheduler | null = null;
-let discoveryRunning = false;
 let followUpsRunning = false;
 
+/**
+ * The scheduled sweep goes through the same job the dashboard starts.
+ *
+ * It used to call runFullPipeline directly, which creates no PipelineJob, so a
+ * cron run was invisible: the overview showed nothing running while the
+ * pipeline lease was held, and an operator pressing "Run full scan" during the
+ * morning sweep got a job that failed immediately with "a discovery scan is
+ * already running". Going through startPipelineJob means a scheduled run shows
+ * its progress, can be stopped, and reports what it found exactly like a manual
+ * one. The unique active-job index is also what keeps two runs from
+ * overlapping, which is sturdier than the in-process flag this replaces: that
+ * flag was lost on every restart and said nothing about other instances.
+ */
 async function discoveryJob(): Promise<void> {
-  if (discoveryRunning) {
-    logger.warn("Skipping scheduled discovery, previous run still in progress");
-    return;
-  }
-  discoveryRunning = true;
   try {
     const settings = await getSettings().catch(() => null);
     if (settings && !settings.discoveryEnabled) {
@@ -37,12 +44,16 @@ async function discoveryJob(): Promise<void> {
       logger.warn("Scheduled discovery skipped, no discovery source configured (Places key or directory source)");
       return;
     }
-    const result = await runFullPipeline("CRON");
-    logger.info(result, "scheduled pipeline run finished");
+    const job = await startPipelineJob({ type: "FULL", trigger: "CRON" });
+    logger.info({ jobId: String(job._id) }, "scheduled pipeline run started");
   } catch (err) {
-    logger.error({ err: String(err) }, "scheduled pipeline run failed");
-  } finally {
-    discoveryRunning = false;
+    // A run already under way is the expected answer when the operator started
+    // one by hand a moment earlier. It is not a fault worth an error log.
+    if ((err as { statusCode?: number })?.statusCode === 409) {
+      logger.warn("Skipping scheduled discovery, another pipeline run is already active");
+      return;
+    }
+    logger.error({ err: String(err) }, "scheduled pipeline run failed to start");
   }
 }
 

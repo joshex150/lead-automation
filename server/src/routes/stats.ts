@@ -6,6 +6,8 @@ import { SearchRun } from "../models/SearchRun.js";
 import { asyncHandler } from "../middleware/index.js";
 import { integrationStatus } from "../config/runtime.js";
 import { getSettings } from "../models/Settings.js";
+import { queueWorkFilter } from "../services/outreach/queue.js";
+import { emailsSentToday } from "../services/outreach/email/index.js";
 
 export const statsRouter = Router();
 
@@ -198,7 +200,10 @@ statsRouter.get(
         ...scope,
         $or: [
           ...qualifiedNeed.$or,
-          { "approval.status": "APPROVED" },
+          // A lead that was pitched and then rejected did reach qualification,
+          // and a threshold raised since then must not erase that. The same
+          // rule as /api/stats, so the overview and this page agree.
+          { "approval.status": { $in: ["APPROVED", "REJECTED"] } },
           { outreachStatus: { $in: CONTACTED_STATUSES } },
         ],
       }),
@@ -320,45 +325,155 @@ statsRouter.get(
   asyncHandler(async (_req, res) => {
     const status = await integrationStatus();
     const settings = await getSettings();
-    const [byStage, byWebsiteType, byCity, byOutreach, bySource, totals, revenue, convertedDealsCount, queueByChannel, recentRuns, recentActivity] =
+
+    /*
+     * The funnel's scope, and it is the same scope the leads list defaults to.
+     *
+     * A lead that asked not to be contacted is still a business we tracked, so
+     * it stays in `total` under the page heading. It is not part of the
+     * commercial funnel, and leaving it in made every step of the funnel count
+     * leads that clicking through to the list would not show.
+     */
+    const live = { optedOut: { $ne: true } } as const;
+    /*
+     * Every funnel figure counts the leads that reached a stage *or went past
+     * it*, never the ones sitting in it right now.
+     *
+     * Current state is the wrong measure for a funnel and it showed: a lead
+     * that was contacted is no longer awaiting approval and a lead that
+     * converted is no longer merely interested, so the steps did not shrink
+     * from top to bottom, they jumped about. "Discovered" was read off the
+     * DISCOVERED stage, which empties as soon as a scan processes what it
+     * found, so the first step of the funnel was usually near zero with
+     * hundreds of leads shown below it, and "interested / contacted" came out
+     * well over 100%.
+     */
+    const [byStage, byWebsiteType, byCity, byOutreach, bySource, totals, revenue, convertedDealsCount, queueByChannel, recentRuns, recentActivity, sentToday] =
       await Promise.all([
         Lead.aggregate([{ $group: { _id: "$pipelineStage", count: { $sum: 1 } } }]),
         Lead.aggregate([{ $group: { _id: "$websiteType", count: { $sum: 1 } } }]),
         Lead.aggregate([{ $group: { _id: "$city", count: { $sum: 1 } } }]),
-        Lead.aggregate([{ $group: { _id: "$outreachStatus", count: { $sum: 1 } } }]),
+        /*
+         * One pass, eight figures.
+         *
+         * Every count below used to be its own countDocuments over the whole
+         * collection: the total, the opt-outs, and each step of the funnel,
+         * eight scans asking eight versions of the same question. The answer to
+         * all of them is in one grouping by the three fields they test, which
+         * is at most a few dozen buckets however many leads there are. This
+         * endpoint is read on every page mount and on a poll from every open
+         * view, and it is what made the approval queue sit behind skeletons
+         * while it ran.
+         */
+        Lead.aggregate<{ _id: { status: string | null; approval: string | null; optedOut: boolean | null }; count: number }>([
+          {
+            $group: {
+              _id: { status: "$outreachStatus", approval: "$approval.status", optedOut: "$optedOut" },
+              count: { $sum: 1 },
+            },
+          },
+        ]),
         Lead.aggregate([{ $group: { _id: "$discoverySource", count: { $sum: 1 } } }]),
         Promise.all([
-          Lead.countDocuments(),
-          Lead.countDocuments({ "approval.status": "PENDING" }),
-          Lead.countDocuments({ outreachStatus: "CONTACTED" }),
-          Lead.countDocuments({ outreachStatus: "INTERESTED" }),
-          Lead.countDocuments({ outreachStatus: "CONVERTED" }),
-          Lead.countDocuments({ optedOut: true }),
+          // The same leads the queue itself lists, so the badge in the sidebar,
+          // the card on the overview and the heading on the queue page are one
+          // number rather than three.
+          Lead.countDocuments(queueWorkFilter({ reachableOnly: true })),
+          // The only one that cannot come from the grouping above: it tests a
+          // score against a threshold rather than an exact value.
+          Lead.countDocuments({
+            ...live,
+            $or: [
+              { needScore: { $gte: settings.scoreThreshold } },
+              { needScore: { $exists: false }, leadScore: { $gte: settings.scoreThreshold } },
+              { "approval.status": { $in: ["APPROVED", "REJECTED"] } },
+              { outreachStatus: { $in: CONTACTED_STATUSES } },
+            ],
+          }),
         ]),
         // Sum of deal values (aggregation). The count of deals is taken from a
         // separate countDocuments below, keeping this portable across
         // Mongo-compatible backends that don't implement $cond / constant $sum.
+        // Same scope as the converted figure in the funnel, or the overview
+        // reports revenue from more deals than it says were won.
         Lead.aggregate([
-          { $match: { outreachStatus: "CONVERTED", estimatedDealValue: { $gt: 0 } } },
+          { $match: { ...live, outreachStatus: "CONVERTED", estimatedDealValue: { $gt: 0 } } },
           { $group: { _id: null, total: { $sum: "$estimatedDealValue" } } },
         ]),
-        Lead.countDocuments({ outreachStatus: "CONVERTED", estimatedDealValue: { $gt: 0 } }),
+        Lead.countDocuments({ ...live, outreachStatus: "CONVERTED", estimatedDealValue: { $gt: 0 } }),
         // How the approval queue splits by channel. Without this the queue's
         // filter buttons look broken when one of them is legitimately empty:
         // the operator presses Email, sees nothing, and concludes the button
         // does not work rather than that no lead has an address.
         Lead.aggregate([
-          { $match: { "approval.status": "PENDING", pipelineStage: { $in: ["PENDING_APPROVAL", "APPROVED"] } } },
+          { $match: queueWorkFilter() },
           { $group: { _id: "$outreachChannel", count: { $sum: 1 } } },
         ]),
         SearchRun.find().sort({ startedAt: -1 }).limit(5).lean(),
         OutreachLog.find().sort({ createdAt: -1 }).limit(15).populate("leadId", "businessName city").lean(),
+        // How much sending is left today. The cap used to announce itself only
+        // as a 429 on the send the operator had already decided to make, which
+        // is the last possible moment to learn you cannot.
+        emailsSentToday(),
       ]);
 
-    const [total, pendingApproval, contacted, interested, converted, optedOut] = totals;
+    const [pendingApproval, qualified] = totals;
+
+    /*
+     * The funnel, read off the one grouping.
+     *
+     * `live` here is the same rule the database filter uses, applied to a
+     * bucket in hand: a lead that opted out is still tracked but is not part of
+     * the commercial funnel.
+     */
+    const CONTACTED_SET = new Set(CONTACTED_STATUSES);
+    const RESPONDED_SET = new Set(RESPONDED_STATUSES);
+    let total = 0;
+    let optedOut = 0;
+    let discovered = 0;
+    let approved = 0;
+    let contacted = 0;
+    let responded = 0;
+    let interested = 0;
+    let converted = 0;
+    const outreachTally: Record<string, number> = {};
+
+    for (const row of byOutreach) {
+      const status = row._id?.status ?? "UNKNOWN";
+      const count = row.count;
+      total += count;
+      outreachTally[status] = (outreachTally[status] ?? 0) + count;
+
+      if (row._id?.optedOut === true) {
+        optedOut += count;
+        continue;
+      }
+      discovered += count;
+
+      const wasContacted = CONTACTED_SET.has(status);
+      if (wasContacted) contacted += count;
+      if (RESPONDED_SET.has(status)) responded += count;
+      if (status === "INTERESTED" || status === "CONVERTED") interested += count;
+      if (status === "CONVERTED") converted += count;
+      // Reaching the approved step means approved *or past it*: a lead
+      // contacted without a recorded approval still got there.
+      if (row._id?.approval === "APPROVED" || wasContacted) approved += count;
+    }
 
     res.json({
-      totals: { total, pendingApproval, contacted, interested, converted, optedOut },
+      totals: {
+        total,
+        discovered,
+        pendingApproval,
+        qualified,
+        approved,
+        contacted,
+        responded,
+        interested,
+        converted,
+        optedOut,
+      },
+      qualificationThreshold: settings.scoreThreshold,
       revenue: {
         totalDealValue: revenue[0]?.total ?? 0,
         convertedDeals: convertedDealsCount,
@@ -366,9 +481,14 @@ statsRouter.get(
       byStage: toMap(byStage),
       byWebsiteType: toMap(byWebsiteType),
       byCity: toMap(byCity),
-      byOutreachStatus: toMap(byOutreach),
+      byOutreachStatus: outreachTally,
       bySource: toMap(bySource),
       queueByChannel: toMap(queueByChannel),
+      email: {
+        sentToday,
+        dailyCap: settings.dailyEmailCap,
+        remaining: Math.max(0, settings.dailyEmailCap - sentToday),
+      },
       onboardedAt: settings.onboardedAt,
       recentRuns,
       recentActivity,

@@ -72,12 +72,28 @@ export function ImportPanel({ open, onClose, onDone }: { open: boolean; onClose:
         city: city.trim() || undefined,
         category: category.trim() || undefined,
       });
-      toast.success(
+      /*
+       * Saving and auditing are two things, and the message says which of them
+       * happened. A large paste is left for the pipeline on purpose, and a
+       * scan already running means the audit has to wait its turn; in both
+       * cases the leads are safely on file, which is what the operator most
+       * needs to know before they consider pasting the same list again.
+       */
+      const saved =
         `Imported ${result.created} new lead${result.created === 1 ? "" : "s"}` +
-          (result.duplicates ? `, ${result.duplicates} already known` : "") +
-          (result.processing?.qualified ? `, ${result.processing.qualified} qualified` : ""),
-        { duration: 7000 },
-      );
+        (result.duplicates ? `, ${result.duplicates} already known` : "");
+
+      if (result.processingError || result.processingDeferred) {
+        toast.success(
+          `${saved}. They are saved and waiting to be checked and scored, which you can start from the overview.`,
+          { duration: 9000 },
+        );
+      } else {
+        toast.success(
+          saved + (result.processing?.qualified ? `, ${result.processing.qualified} qualified` : ""),
+          { duration: 7000 },
+        );
+      }
       setText("");
       onDone?.();
       onClose();

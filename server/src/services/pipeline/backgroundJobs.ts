@@ -11,10 +11,12 @@ import { logger } from "../../utils/logger.js";
 import {
   discover,
   pendingPitchFilter,
+  processablePendingFilter,
   processPendingLeads,
   recoverableQueriesForRun,
   resumeDiscoveryRun,
   runFullPipeline,
+  MAX_PROCESSING_ATTEMPTS,
   type BatchProcessResult,
   type DiscoverResult,
 } from "./runPipeline.js";
@@ -22,6 +24,8 @@ import {
 export interface StartPipelineJobOptions {
   type: PipelineJobType;
   resumedFromRunId?: string;
+  /** Who asked for it. Cron runs are tracked exactly like operator ones. */
+  trigger?: "CRON" | "MANUAL" | "API";
 }
 
 function busyError(active?: PipelineJobDocument | null): Error {
@@ -183,18 +187,36 @@ async function executePipelineJob(job: PipelineJobDocument): Promise<void> {
       await assertNotCancelled(jobId);
     };
 
+    // The search run is stamped with who asked for it, so run history tells a
+    // scheduled sweep apart from one somebody started by hand.
+    const trigger = job.trigger ?? "API";
+
     if (job.type === "FULL") {
-      const result = await runFullPipeline("API", { onDiscoveryProgress, onProcessingProgress });
+      const result = await runFullPipeline(trigger, { onDiscoveryProgress, onProcessingProgress });
       discovery = result;
       processing = result;
     } else if (job.type === "DISCOVERY") {
-      discovery = await discover("API", undefined, { onProgress: onDiscoveryProgress });
+      discovery = await discover(trigger, undefined, { onProgress: onDiscoveryProgress });
     } else if (job.type === "PROCESS") {
       processing = await processPendingLeads(200, 50, { onProgress: onProcessingProgress });
     } else {
       if (!job.resumedFromRunId) throw new Error("A source discovery run is required to resume.");
-      discovery = await resumeDiscoveryRun(String(job.resumedFromRunId), "API", onDiscoveryProgress);
+      discovery = await resumeDiscoveryRun(String(job.resumedFromRunId), trigger, onDiscoveryProgress);
       processing = await processPendingLeads(200, 50, { onProgress: onProcessingProgress });
+    }
+
+    /*
+     * Attribute the processing figures to the search run that produced them.
+     *
+     * runFullPipeline does this for itself, so a full scan showed a yield and a
+     * resumed one showed none: the run history reported "—" against a resume
+     * that had discovered and processed hundreds of leads, because nothing on
+     * that path ever wrote the numbers back.
+     */
+    if (discovery?.runId && processing) {
+      await SearchRun.findByIdAndUpdate(discovery.runId, {
+        $set: { "totals.processed": processing.processed, "totals.qualified": processing.qualified },
+      }).catch(() => undefined);
     }
 
     const status = finalStatus(discovery, processing);
@@ -347,7 +369,7 @@ export async function startPipelineJob(options: StartPipelineJobOptions): Promis
   try {
     job = await PipelineJob.create({
       type: options.type,
-      trigger: "API",
+      trigger: options.trigger ?? "API",
       status: "QUEUED",
       phase: "QUEUED",
       activeKey: "pipeline",
@@ -378,6 +400,8 @@ export async function getPipelineOperationalStatus(): Promise<{
   latestJob: PipelineJobDocument | null;
   discoveredPending: number;
   pitchPending: number;
+  /** Leads that have failed often enough that nothing retries them any more. */
+  stalledLeads: number;
   resumableRun: { runId: string; status: string; recoverableQueries: number; startedAt: Date } | null;
 }> {
   // A run that failed weeks ago is not pending work. The right answer then is a
@@ -386,21 +410,32 @@ export async function getPipelineOperationalStatus(): Promise<{
   const RESUMABLE_WINDOW_DAYS = 7;
   const resumableSince = new Date(Date.now() - RESUMABLE_WINDOW_DAYS * 86_400_000);
 
-  const [rawActiveJob, latestJob, discoveredPending, pitchPending, candidates] = await Promise.all([
+  const [rawActiveJob, latestJob, discoveredPending, pitchPending, stalledLeads, candidates] = await Promise.all([
     PipelineJob.findOne({ activeKey: "pipeline" }).sort({ createdAt: -1 }),
     PipelineJob.findOne().sort({ createdAt: -1 }),
     // Leads that have already failed processing repeatedly are not work this
     // button can finish. Counting them left "Process N discovered" on screen
     // permanently, doing nothing each time it was pressed.
-    Lead.countDocuments({
-      pipelineStage: "DISCOVERED",
-      optedOut: { $ne: true },
-      $or: [{ processingAttempts: { $exists: false } }, { processingAttempts: { $lt: 3 } }],
-    }),
+    Lead.countDocuments(processablePendingFilter()),
     // Leads that qualified but never got a message. They are not in the
     // approval queue and nothing else looks for them, so without this count
     // they are simply lost.
     Lead.countDocuments(pendingPitchFilter()),
+    /*
+     * The ones nothing will pick up again.
+     *
+     * Both counters above deliberately exclude leads that have already failed
+     * three times, because pressing a button that cannot finish them is worse
+     * than not offering it. The consequence was that those leads then appeared
+     * in no figure anywhere: work that had quietly stopped and said nothing.
+     * Counted separately so the overview can say so, with the reason attached
+     * to each lead in `lastProcessingError`.
+     */
+    Lead.countDocuments({
+      optedOut: { $ne: true },
+      processingAttempts: { $gte: MAX_PROCESSING_ATTEMPTS },
+      pipelineStage: { $in: ["DISCOVERED", "QUALIFIED"] },
+    }),
     SearchRun.find({
       resumedBy: { $exists: false },
       startedAt: { $gte: resumableSince },
@@ -441,7 +476,7 @@ export async function getPipelineOperationalStatus(): Promise<{
     }
   }
 
-  return { activeJob, latestJob: currentLatest, discoveredPending, pitchPending, resumableRun };
+  return { activeJob, latestJob: currentLatest, discoveredPending, pitchPending, stalledLeads, resumableRun };
 }
 
 /**

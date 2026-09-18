@@ -102,6 +102,18 @@ export interface Lead {
   pitchFallbackReason?: string;
   outreachChannel: "EMAIL" | "INSTAGRAM_MANUAL" | "WHATSAPP" | "NONE";
   pipelineStage: PipelineStage;
+  /** 0-100 confidence that the stored address reaches the owner. */
+  emailConfidence?: number;
+  /** Why that confidence, in words. */
+  emailAssessment?: string;
+  /** Addresses found on the site but judged to belong to somebody else. */
+  rejectedEmails?: Array<{ value: string; reason: string }>;
+  /** Addresses a message has already bounced from. */
+  bouncedEmails?: string[];
+  /** Why the pipeline last failed on this lead, if it did. */
+  lastProcessingError?: string;
+  /** How many times processing has thrown. Three is where retrying stops. */
+  processingAttempts?: number;
   outreachStatus: OutreachStatus;
   approval: { status: "NONE" | "PENDING" | "APPROVED" | "REJECTED"; reviewedAt?: string; notes?: string };
   gmailDraftId?: string;
@@ -130,14 +142,29 @@ export interface OutreachLogEntry {
 }
 
 export interface Stats {
+  /**
+   * Cumulative, never current-state: each figure counts the leads that reached
+   * that point *or went past it*. A converted lead is still counted as
+   * contacted, which is what makes the funnel narrow from top to bottom and the
+   * rates between steps land under 100%.
+   */
   totals: {
+    /** Every business on file, opted out or not. The page heading's figure. */
     total: number;
+    /** The funnel's first step: everything still in play. */
+    discovered: number;
+    /** Exactly what the approval queue lists, so the badge and the page agree. */
     pendingApproval: number;
+    qualified: number;
+    approved: number;
     contacted: number;
+    responded: number;
     interested: number;
     converted: number;
     optedOut: number;
   };
+  /** The need score at which a lead qualifies, so links can reproduce it. */
+  qualificationThreshold: number;
   revenue: { totalDealValue: number; convertedDeals: number };
   byStage: Record<string, number>;
   byWebsiteType: Record<string, number>;
@@ -146,6 +173,8 @@ export interface Stats {
   bySource: Record<string, number>;
   /** How the approval queue splits by outreach channel. */
   queueByChannel?: Record<string, number>;
+  /** Today's sending budget, so the cap is known before a send is attempted. */
+  email?: { sentToday: number; dailyCap: number; remaining: number };
   onboardedAt: string | null;
   recentRuns: Array<{
     _id: string;
@@ -206,6 +235,8 @@ export interface PipelineOperationalStatus {
   discoveredPending: number;
   /** Qualified leads still waiting for a message to be written. */
   pitchPending?: number;
+  /** Leads that failed processing often enough that nothing retries them. */
+  stalledLeads?: number;
   resumableRun: {
     runId: string;
     status: string;
@@ -344,6 +375,10 @@ export interface ImportResult {
   suppressed: number;
   invalid: number;
   processing?: { qualified: number };
+  /** Set when the leads were saved but could not be processed right away. */
+  processingError?: string;
+  /** Set when the batch was too large to audit inline and was left queued. */
+  processingDeferred?: boolean;
 }
 
 export interface IntegrationStatus {

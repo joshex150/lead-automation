@@ -193,6 +193,28 @@ export default function LeadDetailPage() {
         </div>
       </header>
 
+      {/*
+        Why this lead stopped moving, on the lead itself.
+        The overview can say that some leads could not be processed, but the
+        reason is per lead and was recorded and then never shown anywhere, so
+        the only way to find out was to read the server log.
+      */}
+      {lead.lastProcessingError && (
+        <div className="mt-6 border-l-4 border-rose-500 bg-rose-500/5 p-4" role="status">
+          <p className="text-sm font-bold text-rose-600 dark:text-rose-400">
+            {(lead.processingAttempts ?? 0) >= 3
+              ? "This lead could not be processed, and is no longer retried automatically"
+              : "The last attempt to process this lead failed"}
+          </p>
+          <p className="mt-1 break-words text-xs leading-relaxed text-slate-600 [overflow-wrap:anywhere] dark:text-slate-300">
+            {lead.lastProcessingError}
+          </p>
+          <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+            Re-check runs the whole audit again for this one lead, which is usually enough once the cause is fixed.
+          </p>
+        </div>
+      )}
+
       <div className="mt-8 grid items-start gap-6 xl:grid-cols-12">
         <main className="space-y-6 xl:col-span-8">
           <section className="panel accent-brand border-t-4">
@@ -250,6 +272,15 @@ export default function LeadDetailPage() {
             <div className="grid gap-5 md:grid-cols-2">
               <Field icon={<RiMailLine />} label="Email">
                 <input className="input" value={form.email} placeholder="Add email" onChange={(event) => setForm({ ...form, email: event.target.value })} />
+                {/*
+                  What the pipeline knows about this address, and why the field
+                  may be empty. All three were carefully recorded during
+                  enrichment and then shown nowhere, so a lead with an address
+                  sitting in plain sight on its own website looked like one
+                  nobody had bothered to look for, and an address that had
+                  bounced looked like one that had never existed.
+                */}
+                <EmailProvenance lead={lead} />
               </Field>
               <Field icon={<RiInstagramLine />} label="Instagram">
                 <input
@@ -548,6 +579,59 @@ function ScoreBreakdown({
             </li>
           ))}
         </ul>
+      )}
+    </div>
+  );
+}
+
+/** Confidence in the stored address, and every address ruled out so far. */
+function EmailProvenance({ lead }: { lead: Lead }) {
+  const bounced = lead.bouncedEmails ?? [];
+  const rejected = lead.rejectedEmails ?? [];
+  const hasAssessment = Boolean(lead.email && lead.emailAssessment);
+  if (!hasAssessment && bounced.length === 0 && rejected.length === 0) return null;
+
+  return (
+    <div className="mt-2 space-y-2 text-xs">
+      {hasAssessment && (
+        <p className="break-words text-slate-500 [overflow-wrap:anywhere] dark:text-slate-400">
+          {typeof lead.emailConfidence === "number" && (
+            <span
+              className={`mr-1.5 font-extrabold tabular-nums ${
+                lead.emailConfidence >= 70
+                  ? "text-emerald-600"
+                  : lead.emailConfidence >= 40
+                    ? "text-amber-600"
+                    : "text-rose-500"
+              }`}
+            >
+              {lead.emailConfidence}%
+            </span>
+          )}
+          {lead.emailAssessment}
+        </p>
+      )}
+
+      {bounced.length > 0 && (
+        <p className="break-words border-l-2 border-rose-400 pl-2 text-rose-600 [overflow-wrap:anywhere] dark:text-rose-400">
+          {bounced.length === 1 ? "Bounced, so no longer used:" : "Bounced, so no longer used:"}{" "}
+          <span className="font-semibold">{bounced.join(", ")}</span>
+        </p>
+      )}
+
+      {rejected.length > 0 && (
+        <details className="text-slate-500 dark:text-slate-400">
+          <summary className="cursor-pointer font-semibold">
+            {rejected.length} address{rejected.length === 1 ? "" : "es"} on the site were not used
+          </summary>
+          <ul className="mt-1.5 space-y-1">
+            {rejected.map((entry) => (
+              <li key={entry.value} className="break-words [overflow-wrap:anywhere]">
+                <span className="font-semibold">{entry.value}</span> — {entry.reason}
+              </li>
+            ))}
+          </ul>
+        </details>
       )}
     </div>
   );

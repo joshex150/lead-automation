@@ -41,6 +41,18 @@ const SPAN_CLASS: Record<number, string> = {
 
 const SECTION_SPAN: Record<string, number> = Object.fromEntries(SECTION_ITEMS.map((s) => [s.id, s.span]));
 
+/*
+ * Where a cumulative figure sends you.
+ *
+ * Every headline count includes the leads that went past the stage as well as
+ * the ones sitting in it, so the link has to ask for the same set. A card
+ * reading 48 contacted that opened a list of 6 was the figure and the filter
+ * disagreeing, and the list is the one people believe.
+ */
+const CONTACTED_HREF =
+  "/leads?outreachStatus=CONTACTED,FOLLOW_UP_SENT,RESPONDED,INTERESTED,NOT_INTERESTED,CONVERTED";
+const INTERESTED_HREF = "/leads?outreachStatus=INTERESTED,CONVERTED";
+
 /** Same reason as the spans: the tone has to resolve to a class Tailwind saw. */
 const TONE_FILL: Record<string, string> = {
   brand: "bg-brand-600",
@@ -105,11 +117,23 @@ export default function OverviewPage() {
     }
   }, [load]);
 
+  /*
+   * Poll faster while something is running, and only re-arm when the run
+   * itself changes.
+   *
+   * This effect depended on `operations?.activeJob`, which is a fresh object on
+   * every response. Each poll therefore changed the dependency, which tore the
+   * interval down, re-ran the effect and fired another request immediately: a
+   * loop with no delay in it at all, hammering the status endpoint for as long
+   * as a scan was running, which is exactly when the server can least afford
+   * it. The job's id is the thing that actually changes when the work does.
+   */
+  const activeJobId = operations?.activeJob?._id ?? null;
   useEffect(() => {
     void loadOperations();
-    const timer = window.setInterval(() => void loadOperations(), operations?.activeJob ? 3000 : 12000);
+    const timer = window.setInterval(() => void loadOperations(), activeJobId ? 3000 : 12000);
     return () => window.clearInterval(timer);
-  }, [loadOperations, operations?.activeJob]);
+  }, [loadOperations, activeJobId]);
 
   function adoptStartedJob(job: PipelineJob): void {
     previousActiveJob.current = job._id;
@@ -119,6 +143,7 @@ export default function OverviewPage() {
       latestJob: job,
       discoveredPending: current?.discoveredPending ?? 0,
       pitchPending: current?.pitchPending ?? 0,
+      stalledLeads: current?.stalledLeads ?? 0,
       resumableRun: current?.resumableRun ?? null,
     }));
   }
@@ -211,15 +236,24 @@ export default function OverviewPage() {
     }
   }
 
+  /*
+   * Rates are read against the step above them, and every step is cumulative.
+   *
+   * These used to divide by the count of leads whose status is *currently*
+   * CONTACTED or INTERESTED. A lead that replied is no longer merely contacted
+   * and a lead that converted is no longer merely interested, so the divisor
+   * shrank as the numerator grew: ten interested against two still-uncontacted
+   * leads printed "500% became interested" on the card. With cumulative counts
+   * the numerator is always a subset of the divisor, so these stay within 100.
+   */
   const insights = useMemo(() => {
     if (!stats) return null;
-    const total = Math.max(stats.totals.total, 1);
-    const contacted = Math.max(stats.totals.contacted, 1);
-    const interested = Math.max(stats.totals.interested, 1);
+    const { discovered, contacted, interested, converted, pendingApproval } = stats.totals;
+    const share = (part: number, whole: number) => (whole > 0 ? Math.round((part / whole) * 100) : 0);
     return {
-      approvalShare: Math.round((stats.totals.pendingApproval / total) * 100),
-      interestRate: Math.round((stats.totals.interested / contacted) * 100),
-      closeRate: Math.round((stats.totals.converted / interested) * 100),
+      approvalShare: share(pendingApproval, discovered),
+      interestRate: share(interested, contacted),
+      closeRate: share(converted, interested),
       averageDeal:
         stats.revenue.convertedDeals > 0 ? Math.round(stats.revenue.totalDealValue / stats.revenue.convertedDeals) : 0,
     };
@@ -245,14 +279,29 @@ export default function OverviewPage() {
   if (!stats || !insights) return <OverviewSkeleton />;
   const pipelineBusy = Boolean(operations?.activeJob || starting);
 
+  /*
+   * The commercial funnel, and it only narrows.
+   *
+   * "Discovered" was read off the count of leads sitting in the DISCOVERED
+   * stage, which is the count of leads a scan has found and *not yet
+   * processed*: it empties to near zero at the end of every run. The first bar
+   * was therefore usually a handful with hundreds of leads charted below it,
+   * and "from prior stage" came out in the thousands of percent. Each step now
+   * counts everything that reached it or went past it, the same rule the
+   * analytics page uses, so the two pages agree and the shape is a funnel.
+   */
   const funnel: Array<[string, number, string]> = [
-    ["Discovered", stats.byStage.DISCOVERED ?? stats.totals.total, "/leads?stage=DISCOVERED"],
-    ["Pending approval", stats.totals.pendingApproval, "/queue"],
-    ["Contacted", stats.totals.contacted, "/leads?outreachStatus=CONTACTED"],
-    ["Interested", stats.totals.interested, "/leads?outreachStatus=INTERESTED"],
+    ["Discovered", stats.totals.discovered, "/leads"],
+    ["Qualified", stats.totals.qualified, `/leads?minScore=${stats.qualificationThreshold}`],
+    ["Approved", stats.totals.approved, "/leads?approvalStatus=APPROVED"],
+    ["Contacted", stats.totals.contacted, CONTACTED_HREF],
+    ["Interested", stats.totals.interested, INTERESTED_HREF],
     ["Converted", stats.totals.converted, "/leads?outreachStatus=CONVERTED"],
   ];
   const funnelMax = Math.max(...funnel.map(([, value]) => value), 1);
+
+  const noRoute = stats.queueByChannel?.NONE ?? 0;
+  const stalled = operations?.stalledLeads ?? 0;
 
   const attention = [
     !stats.integrations.googlePlaces
@@ -270,6 +319,32 @@ export default function OverviewPage() {
           detail: "Approval is the current pipeline bottleneck.",
           href: "/queue",
           tone: "brand",
+        }
+      : null,
+    /*
+      The queue count is now the reachable leads only, which is what the queue
+      itself lists. Qualified businesses with no email, handle or mobile are
+      real work and would otherwise appear in no figure on this page at all.
+    */
+    noRoute > 0
+      ? {
+          title: `${noRoute} qualified lead${noRoute === 1 ? "" : "s"} with no way to reach them`,
+          detail: "A pitch is written and waiting; they need a contact before it can go anywhere.",
+          href: "/queue",
+          tone: "cta",
+        }
+      : null,
+    /*
+      Work that has given up retrying is still work. Nothing picks these up
+      again, and until this line they were in no figure on any page: the
+      quietest way for a pipeline to stop part-way.
+    */
+    stalled > 0
+      ? {
+          title: `${stalled} lead${stalled === 1 ? "" : "s"} could not be processed`,
+          detail: "They failed three times and are no longer retried. Open one to see why.",
+          href: "/leads?stage=DISCOVERED,QUALIFIED",
+          tone: "rose",
         }
       : null,
   ].filter(Boolean) as Array<{ title: string; detail: string; href: string; tone: string }>;
@@ -300,7 +375,7 @@ export default function OverviewPage() {
         label="Contacted"
         value={stats.totals.contacted}
         context={`${insights.interestRate}% became interested`}
-        href="/leads?outreachStatus=CONTACTED"
+        href={CONTACTED_HREF}
         accent="accent-purple"
         iconClass="text-purple-600"
       />
@@ -311,7 +386,7 @@ export default function OverviewPage() {
         label="Interested"
         value={stats.totals.interested}
         context={`${insights.closeRate}% converted to wins`}
-        href="/leads?outreachStatus=INTERESTED"
+        href={INTERESTED_HREF}
         accent="accent-emerald"
         iconClass="text-emerald-600"
       />

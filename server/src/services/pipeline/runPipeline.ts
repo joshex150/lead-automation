@@ -401,8 +401,26 @@ function applyPitch(lead: LeadDocument, pitch: GroupedPitch): void {
   else lead.set("pitchGroupKey", undefined);
 }
 
+export interface ProcessLeadOptions {
+  /**
+   * Refresh the audit and the score, and leave the outreach side alone.
+   *
+   * Set when re-checking a lead the operator has already acted on. Without it
+   * a re-check ran the whole flow, which ends by writing a fresh pitch and
+   * setting the lead back to PENDING_APPROVAL: pressing "Re-check website" on
+   * a converted client dropped it back into the approval queue with its sent
+   * message overwritten by a new one. The audit is the thing worth refreshing;
+   * the decision already taken is not ours to undo.
+   */
+  keepOutreachState?: boolean;
+}
+
 /** Runs the full check→enrich→score→pitch flow for one lead. */
-export async function processLead(lead: LeadDocument, pitches?: PitchGroupCache): Promise<ProcessOutcome> {
+export async function processLead(
+  lead: LeadDocument,
+  pitches?: PitchGroupCache,
+  options: ProcessLeadOptions = {},
+): Promise<ProcessOutcome> {
   const settings = await getSettings();
 
   // 1) Website health check + classification
@@ -455,11 +473,14 @@ export async function processLead(lead: LeadDocument, pitches?: PitchGroupCache)
   if (check) {
     lead.websiteCheck = { ...check, checkedAt: new Date(check.checkedAt) };
   }
-  lead.pipelineStage = "CHECKED";
+  // The intermediate stages are progress markers for a lead moving through the
+  // pipeline for the first time. On a re-check of a lead that has already been
+  // contacted they would overwrite where it actually is with "ENRICHED".
+  if (!options.keepOutreachState) lead.pipelineStage = "CHECKED";
 
   // 2) Enrichment (contacts with provenance)
   await enrichLead(lead, undefined, countryFromAddress(lead.address)?.iso ?? null);
-  lead.pipelineStage = "ENRICHED";
+  if (!options.keepOutreachState) lead.pipelineStage = "ENRICHED";
 
   // Re-check suppression now that we know email/phone/instagram.
   const sup = await isSuppressed({
@@ -514,11 +535,13 @@ export async function processLead(lead: LeadDocument, pitches?: PitchGroupCache)
   lead.needBreakdown = scoreResult.needBreakdown;
   lead.reachBreakdown = scoreResult.reachBreakdown;
   lead.scoredAt = new Date();
-  lead.pipelineStage = scoreResult.qualified ? "QUALIFIED" : "DISQUALIFIED";
+  if (!options.keepOutreachState) {
+    lead.pipelineStage = scoreResult.qualified ? "QUALIFIED" : "DISQUALIFIED";
+  }
   let aiFallback = false;
 
   // 4) Pitch for qualified leads
-  if (scoreResult.qualified) {
+  if (scoreResult.qualified && !options.keepOutreachState) {
     assignChannel(lead);
 
     /*
@@ -617,18 +640,14 @@ async function processPendingLeadsUnlocked(
   // One cache for the whole pass, so leads in the same situation share a
   // message instead of each buying their own AI call.
   const pitches = new PitchGroupCache(settings.pitch?.reuseAcrossSimilarLeads !== false);
-  const total = Math.min(
-    await Lead.countDocuments({ pipelineStage: "DISCOVERED", optedOut: { $ne: true } }),
-    batchSize * maxBatches,
-  );
+  const total = Math.min(await Lead.countDocuments(processablePendingFilter()), batchSize * maxBatches);
   // Leads that threw stay in DISCOVERED (retried on the NEXT run); exclude
   // them from later batches of THIS run so we never spin on a poison lead.
   const failedIds: unknown[] = [];
 
   for (let batch = 0; batch < maxBatches; batch++) {
     const pending = await Lead.find({
-      pipelineStage: "DISCOVERED",
-      optedOut: { $ne: true },
+      ...processablePendingFilter(),
       ...(failedIds.length ? { _id: { $nin: failedIds } } : {}),
     })
       .sort({ createdAt: 1 })
@@ -796,6 +815,29 @@ export interface DraftPendingResult {
   reusedMessages: number;
 }
 
+/**
+ * Discovered leads still worth attempting.
+ *
+ * The attempt limit is applied here, not only in the counts the dashboard
+ * shows. It was in the count alone, so a lead that had failed three times was
+ * hidden from "Process N discovered" while every scan went on retrying it: the
+ * operator was told it had been given up on and the machine had not, and each
+ * run spent its budget on the same leads that could not succeed. Re-checking
+ * one clears its tally, which is the deliberate way back in.
+ */
+export const MAX_PROCESSING_ATTEMPTS = 3;
+
+export function processablePendingFilter(): Record<string, unknown> {
+  return {
+    pipelineStage: "DISCOVERED",
+    optedOut: { $ne: true },
+    $or: [
+      { processingAttempts: { $exists: false } },
+      { processingAttempts: { $lt: MAX_PROCESSING_ATTEMPTS } },
+    ],
+  };
+}
+
 /** How many leads have qualified but are still waiting for a message. */
 export function pendingPitchFilter(): Record<string, unknown> {
   return {
@@ -803,7 +845,7 @@ export function pendingPitchFilter(): Record<string, unknown> {
     optedOut: { $ne: true },
     $and: [
       { $or: [{ pitchMessage: { $exists: false } }, { pitchMessage: "" }, { pitchMessage: null }] },
-      { $or: [{ processingAttempts: { $exists: false } }, { processingAttempts: { $lt: 3 } }] },
+      { $or: [{ processingAttempts: { $exists: false } }, { processingAttempts: { $lt: MAX_PROCESSING_ATTEMPTS } }] },
     ],
   };
 }

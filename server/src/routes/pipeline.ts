@@ -13,6 +13,7 @@ import {
 import { importLeads, runExtraSources } from "../services/discovery/sources/runSources.js";
 import { runFollowUps } from "../services/outreach/followUp.js";
 import { checkWebsite } from "../services/websiteChecker/index.js";
+import { logger } from "../utils/logger.js";
 
 export const pipelineRouter = Router();
 
@@ -172,8 +173,18 @@ pipelineRouter.post(
   "/discover-sources",
   asyncHandler(async (_req, res) => {
     const runs = await runExtraSources();
-    const processing = await processPendingLeads();
-    res.json({ sources: runs, processing });
+    // Same reasoning as the import below: what the sources found is already
+    // saved, so a processing pass that cannot start must not turn a successful
+    // discovery into a failed request.
+    let processing;
+    let processingError: string | undefined;
+    try {
+      processing = await processPendingLeads();
+    } catch (err) {
+      processingError = err instanceof Error ? err.message : String(err);
+      logger.warn({ err: processingError }, "sources discovered leads but processing could not start");
+    }
+    res.json({ sources: runs, processing, processingError });
   }),
 );
 
@@ -208,9 +219,44 @@ pipelineRouter.post(
   asyncHandler(async (req, res) => {
     const body = req.body as z.infer<typeof importSchema>;
     const result = await importLeads(body.items, { city: body.city, category: body.category });
+
+    /*
+     * The import is done the moment the leads are saved. Processing is a
+     * courtesy on top of it, and it used to be able to take the import down
+     * with it in two different ways.
+     *
+     * It holds the processing lease, so importing while a scan was running
+     * threw PipelineBusyError and the whole request answered 409: the leads
+     * were on file and the operator was told the import had failed. And it runs
+     * a full website check per lead, several seconds each, so a large paste sat
+     * on one HTTP request until the proxy gave up at two minutes, which reads
+     * the same way.
+     *
+     * So: small batches are still processed inline, because that is the case
+     * where waiting is pleasant and the operator sees the result immediately.
+     * Anything larger is left in DISCOVERED, where the overview already offers
+     * to process it and the next scheduled run picks it up regardless. Either
+     * way a failure here is reported beside the import, never instead of it.
+     */
+    const INLINE_PROCESS_LIMIT = 50;
     let processing;
-    if (body.process && result.created > 0) processing = await processPendingLeads();
-    res.json({ ...result, processing });
+    let processingError: string | undefined;
+    let processingDeferred = false;
+
+    if (body.process && result.created > 0) {
+      if (result.created > INLINE_PROCESS_LIMIT) {
+        processingDeferred = true;
+      } else {
+        try {
+          processing = await processPendingLeads();
+        } catch (err) {
+          processingError = err instanceof Error ? err.message : String(err);
+          logger.warn({ err: processingError }, "imported leads were saved but could not be processed yet");
+        }
+      }
+    }
+
+    res.json({ ...result, processing, processingError, processingDeferred });
   }),
 );
 

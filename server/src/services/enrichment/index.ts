@@ -98,12 +98,26 @@ export async function enrichLead(
   // ---- Apply extracted contacts with provenance ----
   const now = new Date();
 
-  if (!lead.email && contacts.emails.length > 0) {
+  /*
+   * An address we have already bounced off is not a candidate.
+   *
+   * Without this, clearing a bounced address achieves nothing: the next
+   * re-check scrapes the same page, finds the same address, and puts it
+   * straight back, so the lead is re-queued to send to a mailbox that does not
+   * exist. A bounce is evidence about the address, and it has to outlive the
+   * field it was stored in.
+   */
+  const bounced = new Set((lead.bouncedEmails ?? []).map((value) => value.toLowerCase()));
+  const candidateEmails = bounced.size
+    ? contacts.emails.filter((email) => !bounced.has(email.value.toLowerCase()))
+    : contacts.emails;
+
+  if (!lead.email && candidateEmails.length > 0) {
     // Not simply the first address on the page. The footer credit for the
     // agency that built the site is an email too, and pitching them wastes the
     // lead and costs sending reputation on the bounce.
     const siteDomain = extractDomain(lead.websiteCheck?.finalUrl ?? lead.websiteUrl ?? null);
-    const { best, rejected } = pickBestEmail(contacts.emails, {
+    const { best, rejected } = pickBestEmail(candidateEmails, {
       siteDomain,
       businessName: lead.businessName,
     });

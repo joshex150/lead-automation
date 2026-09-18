@@ -119,6 +119,15 @@ export interface LeadDocument extends Document {
   emailAssessment?: string;
   /** Addresses found on the page but judged to belong to somebody else. */
   rejectedEmails: Array<{ value: string; reason: string }>;
+  /**
+   * Addresses a message has already bounced from.
+   *
+   * Kept on the lead rather than thrown away, for two reasons: enrichment must
+   * not scrape the same dead address back onto the lead on the next re-check,
+   * and an operator looking at a business with no email needs to see that we
+   * had one and it failed, not an empty field that looks like we never tried.
+   */
+  bouncedEmails: string[];
   /** Set when the real site was found behind a link page or bio. */
   websiteFoundVia?: string;
 
@@ -283,6 +292,7 @@ const leadSchema = new Schema<LeadDocument>(
       type: [{ value: String, reason: String, _id: false }],
       default: [],
     },
+    bouncedEmails: { type: [String], default: [] },
     websiteFoundVia: String,
     processingAttempts: { type: Number, default: 0 },
     lastProcessingError: String,
@@ -341,6 +351,20 @@ leadSchema.index({ businessNameNormalized: 1, city: 1 });
 leadSchema.index({ "approval.status": 1, pipelineStage: 1 });
 leadSchema.index({ createdAt: -1 });
 leadSchema.index({ businessName: "text", address: "text" });
+
+/*
+ * The two reads that happen constantly.
+ *
+ * The approval queue is fetched by every view on a poll and its tallies are
+ * counted on every stats call, and both walked the whole collection: the
+ * existing approval/stage index does not cover the opt-out and channel tests
+ * the queue actually makes. The second covers the recovery counts, which ask
+ * for discovered-or-qualified leads under the attempt limit on every status
+ * poll while a scan is running.
+ */
+leadSchema.index({ optedOut: 1, pipelineStage: 1, "approval.status": 1, outreachStatus: 1, outreachChannel: 1 });
+leadSchema.index({ pipelineStage: 1, optedOut: 1, processingAttempts: 1 });
+leadSchema.index({ optedOut: 1, needScore: -1 });
 
 export const Lead: Model<LeadDocument> =
   (mongoose.models.Lead as Model<LeadDocument>) ?? mongoose.model<LeadDocument>("Lead", leadSchema);

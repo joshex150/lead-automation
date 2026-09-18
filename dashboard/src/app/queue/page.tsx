@@ -11,6 +11,8 @@ import {
   RiErrorWarningLine,
   RiExpandUpDownLine,
   RiContractUpDownLine,
+  RiArrowLeftSLine,
+  RiArrowRightSLine,
 } from "react-icons/ri";
 import { api } from "@/lib/api";
 import { useLiveData } from "@/lib/live";
@@ -18,6 +20,9 @@ import type { Lead, Stats } from "@/lib/types";
 import { QueueCard } from "@/components/QueueCard";
 
 type ChannelFilter = "ALL" | "EMAIL" | "INSTAGRAM_MANUAL" | "WHATSAPP" | "NONE";
+
+/** Enough to work a sitting without scrolling forever, small enough to load fast. */
+const PAGE_SIZE = 50;
 
 /**
  * The filter reads `outreachChannel`, which is one value per lead. Showing the
@@ -41,6 +46,16 @@ export default function QueuePage() {
   const [channel, setChannel] = useState<ChannelFilter>("ALL");
   const [refreshing, setRefreshing] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  /*
+   * The queue is worked from the top, but it must still be possible to reach
+   * the bottom. It listed the first hundred by priority and stopped: with more
+   * than that waiting, the rest could be seen on the leads table but not
+   * approved or sent from anywhere, because the queue card is the only place
+   * those actions exist.
+   */
+  const [page, setPage] = useState(1);
+  const [pages, setPages] = useState(1);
+  const [budget, setBudget] = useState<Stats["email"] | null>(null);
 
   /*
    * What each filter last showed, kept so flipping back is instant.
@@ -50,7 +65,10 @@ export default function QueuePage() {
    * Choosing "Email" therefore took several seconds to show anything at all.
    * A ref rather than state: writing to it must not itself cause a render.
    */
-  const cached = useRef<Map<ChannelFilter, { items: Lead[]; total: number }>>(new Map());
+  const cached = useRef<Map<string, { items: Lead[]; total: number; pages: number }>>(new Map());
+
+  // A page of one channel is what was fetched, so it is what gets cached.
+  const cacheKey = `${channel}:${page}`;
 
   const load = useCallback(() => {
     let cancelled = false;
@@ -66,10 +84,25 @@ export default function QueuePage() {
      */
     const queue = api
       .leads({
-        approvalStatus: "PENDING",
+        /*
+         * Two kinds of work, not one.
+         *
+         * A lead awaiting a decision is the obvious one. A lead already
+         * approved whose message has not gone out is the one that used to
+         * disappear: approving set `approval.status` to APPROVED, this list
+         * asked only for PENDING, and every write refetches, so the card
+         * carrying the only Send button in the application vanished within a
+         * second of pressing Approve. The pitch could then never be sent from
+         * anywhere. A lead leaves here when it is rejected, sent, or marked
+         * contacted by hand.
+         */
+        approvalStatus: "PENDING,APPROVED",
         stage: "PENDING_APPROVAL,APPROVED",
+        outreachStatus: "NOT_CONTACTED,DRAFT_CREATED",
+        hasPitch: "true",
         sort: "-priority",
-        limit: 100,
+        limit: PAGE_SIZE,
+        page,
         /*
          * "All" means every lead that can actually be contacted. The queue is a
          * work list, and a lead with no email, no handle and no mobile number is
@@ -79,7 +112,7 @@ export default function QueuePage() {
          */
         channel: channel === "ALL" ? "EMAIL,INSTAGRAM_MANUAL,WHATSAPP" : channel,
       })
-      .then((result: { items: Lead[]; total: number }) => {
+      .then((result: { items: Lead[]; total: number; pages?: number }) => {
         if (cancelled) return;
         /*
          * Read defensively. A payload that arrives without its envelope, from
@@ -90,10 +123,19 @@ export default function QueuePage() {
          */
         const items = Array.isArray(result?.items) ? result.items : [];
         const count = Number.isFinite(result?.total) ? result.total : items.length;
-        cached.current.set(channel, { items, total: count });
+        const pageCount = Number.isFinite(result?.pages) ? Math.max(1, result!.pages!) : 1;
+        cached.current.set(cacheKey, { items, total: count, pages: pageCount });
         setLeads(items);
         setTotal(count);
+        setPages(pageCount);
         setError(null);
+        /*
+         * Clearing the last page removes it. Working a queue is exactly the
+         * activity that shrinks it, so the page under the operator can stop
+         * existing mid-sitting, and staying there shows an empty list with a
+         * heading that says leads are waiting.
+         */
+        if (page > pageCount) setPage(pageCount);
         // The first lead opens so the page is useful on arrival; the rest stay
         // shut so a queue of five hundred is scannable.
         setExpanded((current) => (current.size === 0 && items[0] ? new Set([items[0]._id]) : current));
@@ -111,7 +153,8 @@ export default function QueuePage() {
     return () => {
       cancelled = true;
     };
-  }, [channel]);
+  }, [channel, page, cacheKey]);
+
 
   /*
    * The tallies on the filter buttons are counts of the whole collection, and
@@ -125,7 +168,9 @@ export default function QueuePage() {
     api
       .stats()
       .then((stats: Stats) => {
-        if (!cancelled) setCounts(stats.queueByChannel ?? null);
+        if (cancelled) return;
+        setCounts(stats.queueByChannel ?? null);
+        setBudget(stats.email ?? null);
       })
       .catch(() => undefined);
     return () => {
@@ -146,10 +191,17 @@ export default function QueuePage() {
    * empty queue before the real answer arrived.
    */
   useEffect(() => {
-    const hit = cached.current.get(channel);
+    const hit = cached.current.get(cacheKey);
     if (!hit) return;
     setLeads(hit.items);
     setTotal(hit.total);
+    setPages(hit.pages);
+  }, [cacheKey]);
+
+  // Changing channel starts at the top of that channel's queue; staying on
+  // page 4 of a filter that only has one page shows an empty list.
+  useEffect(() => {
+    setPage(1);
   }, [channel]);
 
   const remove = (id: string) => {
@@ -224,6 +276,26 @@ export default function QueuePage() {
         </p>
       </div>
 
+      {/*
+        The sending budget, before it is spent rather than after.
+        The cap used to make itself known as a 429 on the send the operator had
+        already decided to make, which is the last possible moment to find out.
+      */}
+      {budget && budget.dailyCap > 0 && budget.remaining <= Math.max(5, Math.round(budget.dailyCap * 0.2)) && (
+        <p
+          role="status"
+          className={`mt-4 border-l-4 py-2 pl-3 text-xs ${
+            budget.remaining === 0
+              ? "border-rose-500 text-rose-600 dark:text-rose-400"
+              : "border-amber-500 text-amber-700 dark:text-amber-400"
+          }`}
+        >
+          {budget.remaining === 0
+            ? `Today's sending cap is reached (${budget.sentToday} of ${budget.dailyCap}). Approving still works and the drafts keep, but email sends will be refused until tomorrow.`
+            : `${budget.remaining} email${budget.remaining === 1 ? "" : "s"} left in today's cap of ${budget.dailyCap}. Instagram and WhatsApp are not capped.`}
+        </p>
+      )}
+
       {error && (
         <div className="mt-6 border-l-4 border-rose-500 bg-rose-500/5 p-4 text-sm text-rose-600 dark:text-rose-400">
           {error}
@@ -260,13 +332,53 @@ export default function QueuePage() {
             key={lead._id}
             lead={lead}
             onDone={remove}
-            position={index + 1}
-            total={leads.length}
+            /* Counted across the whole queue, not within the page: "review 3
+               of 50" under a heading that said 412 waiting was two answers to
+               one question. */
+            position={(page - 1) * PAGE_SIZE + index + 1}
+            total={total}
             open={expanded.has(lead._id)}
             onToggle={toggle}
           />
         ))}
       </div>
+
+      {/*
+        Offset paging over a list that shrinks as it is worked: clearing leads
+        on page 1 pulls the rest up, which is the same behaviour as the leads
+        table and the reason the page is re-read rather than kept.
+      */}
+      {pages > 1 && (
+        <nav className="mt-8 flex items-center justify-center gap-0" aria-label="Approval queue pages">
+          <button
+            type="button"
+            className="btn-ghost !p-2"
+            disabled={page <= 1 || refreshing}
+            onClick={() => {
+              setPage((value) => Math.max(1, value - 1));
+              window.scrollTo({ top: 0 });
+            }}
+          >
+            <RiArrowLeftSLine className="h-5 w-5" />
+            <span className="sr-only">Previous page</span>
+          </button>
+          <span className="border-y border-slate-300 px-4 py-2 text-sm font-bold text-slate-600 dark:border-slate-700 dark:text-slate-300">
+            Page {page} of {pages}
+          </span>
+          <button
+            type="button"
+            className="btn-ghost !p-2"
+            disabled={page >= pages || refreshing}
+            onClick={() => {
+              setPage((value) => value + 1);
+              window.scrollTo({ top: 0 });
+            }}
+          >
+            <RiArrowRightSLine className="h-5 w-5" />
+            <span className="sr-only">Next page</span>
+          </button>
+        </nav>
+      )}
     </div>
   );
 }
