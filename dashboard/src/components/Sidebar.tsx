@@ -25,7 +25,7 @@ import { NAV_ITEMS } from "@/lib/theme/tokens";
 
 /** Everything a nav id needs to become a link. Order and visibility come from the theme. */
 const NAV_DEFS: Record<string, { href: string; icon: IconType }> = {
-  overview: { href: "/", icon: RiDashboardLine },
+  overview: { href: "/overview", icon: RiDashboardLine },
   analytics: { href: "/analytics", icon: RiBarChartBoxLine },
   queue: { href: "/queue", icon: RiInboxArchiveLine },
   leads: { href: "/leads", icon: RiContactsBook2Line },
@@ -106,7 +106,7 @@ export function Sidebar() {
         Workspace
       </p>
       {items.map(({ id: itemId, href, label, icon: Icon }) => {
-        const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
+        const active = pathname === href || pathname.startsWith(`${href}/`);
         const queueCount = itemId === "queue" ? pending : null;
         return (
           <Link

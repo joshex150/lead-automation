@@ -8,8 +8,15 @@ import { SESSION_COOKIE, verifySessionToken } from "@/lib/session";
  * working until the operator opts in. Once set, nothing is reachable without a
  * valid cookie, including the API proxy: gating only the pages would leave the
  * data one fetch away for anybody who guessed the URL.
+ *
+ * The landing page is the exception, and deliberately so: it is the public
+ * front of the site and has to be readable by a visitor and by a crawler.
  */
+const PUBLIC_PATHS = new Set(["/"]);
+
 export async function middleware(req: NextRequest) {
+  if (PUBLIC_PATHS.has(req.nextUrl.pathname)) return NextResponse.next();
+
   const password = process.env.DASHBOARD_PASSWORD;
   if (!password) return NextResponse.next();
 
@@ -27,12 +34,20 @@ export async function middleware(req: NextRequest) {
 
   const login = req.nextUrl.clone();
   login.pathname = "/login";
-  login.search = pathname === "/" ? "" : `?next=${encodeURIComponent(pathname + search)}`;
+  login.search = `?next=${encodeURIComponent(pathname + search)}`;
   return NextResponse.redirect(login);
 }
 
 export const config = {
-  // Everything except the login page, its own auth endpoints, the health probe
-  // and Next's static output.
-  matcher: ["/((?!login|api/auth|health|_next/static|_next/image|favicon.ico).*)"],
+  /*
+   * Everything except the public front of the site and Next's own output.
+   *
+   * The landing page, its screenshots and the files search engines and social
+   * cards ask for are all reachable without signing in, because a page nobody
+   * can read is not a landing page. The workspace behind it is unchanged: every
+   * route and every proxied API call still needs a session.
+   */
+  matcher: [
+    "/((?!login|api/auth|health|screens|opengraph-image|twitter-image|icon|apple-icon|robots.txt|sitemap.xml|manifest.webmanifest|logo.png|_next/static|_next/image|favicon.ico).*)",
+  ],
 };

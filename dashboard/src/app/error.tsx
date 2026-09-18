@@ -43,7 +43,7 @@ export default function RouteError({ error, reset }: { error: Error & { digest?:
           <button type="button" onClick={reset} className="btn-primary">
             <RiRefreshLine className="h-4 w-4" /> Try again
           </button>
-          <Link href="/" className="btn-ghost">
+          <Link href="/overview" className="btn-ghost">
             <RiArrowLeftLine className="h-4 w-4" /> Back to the overview
           </Link>
         </div>

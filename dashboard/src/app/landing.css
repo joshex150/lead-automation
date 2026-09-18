@@ -1,0 +1,474 @@
+/*
+ * The landing page's own look, kept separate from the workspace's.
+ *
+ * The workspace is themeable: an operator can set it to a brutalist high
+ * contrast look or an editorial serif one, and all of that is applied through
+ * CSS variables on :root. A public page that inherited those would change
+ * appearance whenever somebody edited the theme, so everything here is scoped
+ * under .l and defines its own values. It is dark on purpose too, because the
+ * screenshots are light and they need something to sit against.
+ */
+
+.l {
+  --l-ink: #f4f4f5;
+  --l-ink-dim: #a1a1aa;
+  --l-ink-faint: #71717a;
+  --l-bg: #08080a;
+  --l-bg-raised: #101014;
+  --l-line: #232329;
+  --l-accent: #17a34a;
+  --l-accent-soft: rgba(23, 163, 74, 0.14);
+  --l-blue: #3b82f6;
+
+  background: var(--l-bg);
+  color: var(--l-ink);
+  font-family: var(--font-dm-sans), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: clip;
+}
+
+.l h1,
+.l h2,
+.l h3,
+.l .l-num {
+  font-family: var(--font-space-grotesk), system-ui, sans-serif;
+  letter-spacing: -0.03em;
+  line-height: 1.04;
+  font-weight: 700;
+}
+
+.l-wrap {
+  width: 100%;
+  max-width: 1140px;
+  margin-inline: auto;
+  padding-inline: 20px;
+}
+
+/* ----------------------------------------------------------------- header */
+
+.l-head {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  border-bottom: 1px solid transparent;
+  background: rgba(8, 8, 10, 0);
+  transition: background 220ms ease, border-color 220ms ease;
+}
+.l-head[data-stuck="true"] {
+  background: rgba(8, 8, 10, 0.88);
+  backdrop-filter: blur(12px);
+  border-bottom-color: var(--l-line);
+}
+.l-head-in {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  height: 64px;
+}
+.l-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-space-grotesk), sans-serif;
+  font-weight: 700;
+  font-size: 17px;
+  letter-spacing: -0.02em;
+  color: var(--l-ink);
+  text-decoration: none;
+}
+.l-brand span {
+  color: var(--l-accent);
+}
+.l-nav {
+  display: none;
+  gap: 28px;
+}
+@media (min-width: 900px) {
+  .l-nav {
+    display: flex;
+  }
+}
+.l-nav a {
+  color: var(--l-ink-dim);
+  text-decoration: none;
+  font-size: 14px;
+  transition: color 160ms ease;
+}
+.l-nav a:hover {
+  color: var(--l-ink);
+}
+
+/* ------------------------------------------------------------------ atoms */
+
+.l-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 46px;
+  padding-inline: 20px;
+  font-weight: 600;
+  font-size: 15px;
+  text-decoration: none;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  transition: transform 160ms ease, background 160ms ease, border-color 160ms ease;
+}
+.l-btn:active {
+  transform: translateY(1px);
+}
+.l-btn-primary {
+  background: var(--l-accent);
+  color: #05140b;
+}
+.l-btn-primary:hover {
+  background: #1ab855;
+}
+.l-btn-ghost {
+  border-color: var(--l-line);
+  color: var(--l-ink);
+}
+.l-btn-ghost:hover {
+  border-color: #3f3f46;
+  background: var(--l-bg-raised);
+}
+
+.l-kicker {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--l-accent);
+}
+
+.l-lede {
+  color: var(--l-ink-dim);
+  font-size: 17px;
+  line-height: 1.65;
+  max-width: 62ch;
+}
+@media (min-width: 700px) {
+  .l-lede {
+    font-size: 18px;
+  }
+}
+
+/* ------------------------------------------------------------------- hero */
+
+.l-hero {
+  position: relative;
+  padding-top: 72px;
+  padding-bottom: 40px;
+  isolation: isolate;
+}
+/*
+ * The grid and the glow are one element each and both are painted, never
+ * animated in layout, so the hero costs nothing to scroll past.
+ */
+.l-hero::before {
+  content: "";
+  position: absolute;
+  inset: -20% -10% 30%;
+  z-index: -2;
+  background:
+    radial-gradient(60% 50% at 50% 0%, rgba(23, 163, 74, 0.16), transparent 70%),
+    radial-gradient(40% 40% at 85% 20%, rgba(59, 130, 246, 0.1), transparent 70%);
+}
+.l-hero::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background-image: linear-gradient(var(--l-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--l-line) 1px, transparent 1px);
+  background-size: 64px 64px;
+  mask-image: radial-gradient(70% 60% at 50% 25%, #000 20%, transparent 80%);
+  opacity: 0.5;
+}
+.l-h1 {
+  font-size: clamp(38px, 7.2vw, 74px);
+  max-width: 17ch;
+  margin-top: 18px;
+}
+.l-h1 em {
+  font-style: normal;
+  color: var(--l-accent);
+}
+.l-hero-cta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 30px;
+}
+.l-hero-note {
+  margin-top: 16px;
+  font-size: 13px;
+  color: var(--l-ink-faint);
+}
+
+/* ------------------------------------------------------------ screenshots */
+
+.l-shot {
+  border: 1px solid var(--l-line);
+  background: var(--l-bg-raised);
+  box-shadow: 0 40px 90px -40px rgba(0, 0, 0, 0.9);
+}
+.l-shot-bar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--l-line);
+}
+.l-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #2f2f37;
+}
+.l-shot-label {
+  margin-left: 10px;
+  font-family: var(--font-azeret-mono), ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--l-ink-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.l-shot img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.l-shot,
+.l-hero-shot {
+  min-width: 0;
+  max-width: 100%;
+}
+.l-shot-bar {
+  min-width: 0;
+}
+/* The hero shot is cropped so the fold shows the part that matters. */
+.l-shot-crop {
+  max-height: 560px;
+  overflow: hidden;
+}
+
+.l-hero-shot {
+  margin-top: 54px;
+  transform: perspective(1800px) rotateX(7deg) scale(0.99);
+  transform-origin: top center;
+}
+
+/* --------------------------------------------------------------- sections */
+
+.l-section {
+  padding-block: 88px;
+  border-top: 1px solid var(--l-line);
+}
+@media (min-width: 900px) {
+  .l-section {
+    padding-block: 116px;
+  }
+}
+.l-h2 {
+  font-size: clamp(28px, 4.2vw, 44px);
+  max-width: 20ch;
+}
+.l-section-head {
+  max-width: 660px;
+  margin-bottom: 52px;
+}
+.l-section-head .l-lede {
+  margin-top: 18px;
+}
+
+.l-split {
+  display: grid;
+  gap: 40px;
+  align-items: center;
+}
+/*
+ * A grid item defaults to min-width: auto, which means it refuses to shrink
+ * below the widest thing inside it. The screenshots are 3200px PNGs, so on a
+ * 320px phone every column stayed 341px wide and the text beside them went off
+ * the side of the screen, clipped and unreadable. Nothing in this page needs
+ * that floor.
+ */
+.l-split > *,
+.l-steps > *,
+.l-list > *,
+.l-stats > * {
+  min-width: 0;
+}
+@media (min-width: 950px) {
+  .l-split {
+    grid-template-columns: 0.95fr 1.25fr;
+    gap: 64px;
+  }
+  .l-split-flip > :first-child {
+    order: 2;
+  }
+}
+
+/* ------------------------------------------------------------------ steps */
+
+.l-steps {
+  display: grid;
+  gap: 1px;
+  background: var(--l-line);
+  border: 1px solid var(--l-line);
+}
+@media (min-width: 760px) {
+  .l-steps {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (min-width: 1040px) {
+  .l-steps {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+.l-step {
+  background: var(--l-bg);
+  padding: 26px 24px 28px;
+  transition: background 200ms ease;
+}
+.l-step:hover {
+  background: var(--l-bg-raised);
+}
+.l-step-n {
+  font-family: var(--font-azeret-mono), monospace;
+  font-size: 12px;
+  color: var(--l-accent);
+}
+.l-step h3 {
+  font-size: 19px;
+  margin-top: 12px;
+}
+.l-step p {
+  margin-top: 10px;
+  font-size: 14.5px;
+  line-height: 1.62;
+  color: var(--l-ink-dim);
+}
+
+/* ------------------------------------------------------------------ stats */
+
+.l-stats {
+  display: grid;
+  gap: 1px;
+  background: var(--l-line);
+  border-block: 1px solid var(--l-line);
+}
+@media (min-width: 680px) {
+  .l-stats {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+.l-stat {
+  background: var(--l-bg);
+  padding: 30px 24px;
+}
+.l-num {
+  font-size: clamp(30px, 4.6vw, 44px);
+  font-variant-numeric: tabular-nums;
+}
+.l-stat p {
+  margin-top: 8px;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--l-ink-dim);
+}
+
+/* ----------------------------------------------------------------- honest */
+
+.l-list {
+  display: grid;
+  gap: 1px;
+  background: var(--l-line);
+  border: 1px solid var(--l-line);
+}
+.l-item {
+  background: var(--l-bg);
+  padding: 22px 24px;
+}
+.l-item h3 {
+  font-size: 16.5px;
+}
+.l-item p {
+  margin-top: 8px;
+  font-size: 14.5px;
+  line-height: 1.62;
+  color: var(--l-ink-dim);
+}
+
+.l-quote {
+  border-left: 3px solid var(--l-accent);
+  background: var(--l-accent-soft);
+  padding: 20px 24px;
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+/* ------------------------------------------------------------------- foot */
+
+.l-cta {
+  border: 1px solid var(--l-line);
+  background:
+    radial-gradient(70% 140% at 50% 0%, rgba(23, 163, 74, 0.13), transparent 70%),
+    var(--l-bg-raised);
+  padding: 62px 28px 66px;
+  text-align: center;
+}
+.l-foot {
+  border-top: 1px solid var(--l-line);
+  padding-block: 32px;
+  font-size: 13px;
+  color: var(--l-ink-faint);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px 26px;
+  justify-content: space-between;
+  align-items: center;
+}
+.l-foot a {
+  color: var(--l-ink-dim);
+  text-decoration: none;
+}
+.l-foot a:hover {
+  color: var(--l-ink);
+}
+
+/* -------------------------------------------------------------- animation */
+
+/*
+ * One transition, driven by a data attribute an observer sets. Nothing here
+ * animates layout, so a reveal costs a composite and not a reflow.
+ */
+.l-reveal {
+  opacity: 0;
+  transform: translateY(18px);
+  transition: opacity 620ms cubic-bezier(0.22, 1, 0.36, 1), transform 620ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: opacity, transform;
+}
+.l-reveal[data-shown="true"] {
+  opacity: 1;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .l-reveal,
+  .l-hero-shot {
+    opacity: 1 !important;
+    transform: none !important;
+    transition: none !important;
+  }
+  .l *,
+  .l *::before,
+  .l *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

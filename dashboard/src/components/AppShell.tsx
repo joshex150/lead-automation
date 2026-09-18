@@ -18,6 +18,13 @@ const BARE_ROUTES = ["/login"];
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
+  /*
+   * The landing page is the public front of the site, so it gets none of this:
+   * no navigation, no approval count, and above all no setup wizard, which
+   * covers the whole screen and calls an API that will refuse the request.
+   */
+  if (pathname === "/") return <>{children}</>;
+
   if (BARE_ROUTES.some((route) => pathname === route || pathname.startsWith(`${route}/`))) {
     return <div className="app-shell">{children}</div>;
   }

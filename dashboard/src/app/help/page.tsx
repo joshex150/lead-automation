@@ -168,7 +168,7 @@ const ARTICLES: Article[] = [
     body: (
       <>
         <P>
-          Everything starts from the buttons on the <Link href="/" className="link-underline font-bold text-brand-600">Overview</Link>. A
+          Everything starts from the buttons on the <Link href="/overview" className="link-underline font-bold text-brand-600">Overview</Link>. A
           scan runs in the background on the server, so you can close the tab and it carries on. Progress is saved
           continuously; nothing is lost if the browser, or the server, goes away mid-run.
         </P>

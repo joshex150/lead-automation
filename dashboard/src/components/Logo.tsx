@@ -75,7 +75,7 @@ export function Brand({ compact = false, className }: { compact?: boolean; class
 
   return (
     <Link
-      href="/"
+      href="/overview"
       aria-label={`${label}, overview`}
       title={compact ? label : undefined}
       className={`brand-lockup inline-flex min-w-0 items-center gap-2.5 ${className ?? ""}`}

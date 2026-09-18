@@ -34,7 +34,8 @@ const SHOT_DIR = path.join(__dirname, ".audit-shots");
 const WIDTHS = arg("widths", "320,360,390,430,768,1024").split(",").map(Number);
 
 const ROUTES = [
-  { path: "/", name: "overview" },
+  { path: "/", name: "landing" },
+  { path: "/overview", name: "overview" },
   { path: "/analytics", name: "analytics" },
   { path: "/queue", name: "queue" },
   { path: "/leads", name: "leads" },

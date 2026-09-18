@@ -30,7 +30,7 @@ function LoginForm() {
       }
       // A full navigation, not a client push: the middleware has to see the new
       // cookie before it decides what to render.
-      window.location.href = params.get("next") || "/";
+      window.location.href = params.get("next") || "/overview";
     } catch {
       setError("Could not reach the dashboard server");
     } finally {
