@@ -36,11 +36,12 @@ export const metadata: Metadata = {
 
 /** The screenshots, in the order the page walks through the product. */
 const SHOTS = {
-  overview: { src: "/screens/01-overview.png", label: "yean-leads.app/overview" },
-  queue: { src: "/screens/02-queue.png", label: "yean-leads.app/queue" },
-  leads: { src: "/screens/03-leads.png", label: "yean-leads.app/leads" },
-  detail: { src: "/screens/05-lead-detail.png", label: "yean-leads.app/leads/crystal-scents" },
-  onboarding: { src: "/screens/08-onboarding.png", label: "first run" },
+  overview: { src: "/screens/01-overview.png", label: "yean-leads.app/overview", width: 3200, height: 2000 },
+  queue: { src: "/screens/02-queue.png", label: "yean-leads.app/queue", width: 3200, height: 2000 },
+  leads: { src: "/screens/03-leads.png", label: "yean-leads.app/leads", width: 3200, height: 2000 },
+  detail: { src: "/screens/05-lead-detail.png", label: "yean-leads.app/leads/lumen-lodge", width: 3200, height: 2000 },
+  // Cropped to the dialog: the full frame is mostly the dimmed page behind it.
+  onboarding: { src: "/screens/08-onboarding.png", label: "first run", width: 1430, height: 1330 },
 } as const;
 
 function Shot({
@@ -49,7 +50,7 @@ function Shot({
   priority = false,
   crop = false,
 }: {
-  shot: { src: string; label: string };
+  shot: { src: string; label: string; width: number; height: number };
   alt: string;
   priority?: boolean;
   crop?: boolean;
@@ -63,7 +64,14 @@ function Shot({
         <span className="l-shot-label">{shot.label}</span>
       </div>
       <div className={crop ? "l-shot-crop" : undefined}>
-        <Image src={shot.src} alt={alt} width={3200} height={2000} priority={priority} sizes="(max-width: 950px) 100vw, 1100px" />
+        <Image
+          src={shot.src}
+          alt={alt}
+          width={shot.width}
+          height={shot.height}
+          priority={priority}
+          sizes="(max-width: 950px) 100vw, 1100px"
+        />
       </div>
     </div>
   );
@@ -202,7 +210,7 @@ export default function LandingPage() {
                 </div>
               </Reveal>
               <Reveal delay={120}>
-                <Shot shot={SHOTS.detail} alt="A lead page showing the website audit, the score breakdown and where each contact came from" />
+                <Shot shot={SHOTS.detail} alt="A lead page for a business in Accra, showing the score breakdown, the contact routes and the recorded outcome" />
               </Reveal>
             </div>
           </div>

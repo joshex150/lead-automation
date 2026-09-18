@@ -16,6 +16,7 @@ import {
   RiCloseLine,
   RiArrowLeftSLine,
   RiArrowRightSLine,
+  RiLogoutBoxRLine,
 } from "react-icons/ri";
 import type { IconType } from "react-icons";
 import { api } from "@/lib/api";
@@ -45,6 +46,8 @@ export function Sidebar() {
   const [open, setOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [pending, setPending] = useState<number | null>(null);
+  const [authEnabled, setAuthEnabled] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
 
   const items = useMemo(
     () =>
@@ -74,6 +77,26 @@ export function Sidebar() {
     setCollapsed(window.localStorage.getItem("yean-sidebar-collapsed") === "true");
   }, []);
 
+  /*
+   * Whether this deployment has sign-in turned on. Asked for once, from the
+   * dashboard's own route rather than from the API's integration status: that
+   * one reports whether the server wants an API key, which is a different
+   * switch, and showing a sign-out button on a deployment with no sign-in would
+   * be offering to end a session that does not exist.
+   */
+  useEffect(() => {
+    let active = true;
+    fetch("/api/auth/session", { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((body: { authEnabled?: boolean } | null) => {
+        if (active) setAuthEnabled(Boolean(body?.authEnabled));
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, []);
+
   useEffect(() => {
     let active = true;
     const load = () => {
@@ -91,6 +114,16 @@ export function Sidebar() {
       window.clearInterval(interval);
     };
   }, []);
+
+  async function signOut() {
+    setSigningOut(true);
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } catch {
+      // The cookie may already be gone. Either way the next line is the same.
+    }
+    window.location.href = "/login";
+  }
 
   function toggleCollapsed() {
     setCollapsed((value) => {
@@ -159,6 +192,7 @@ export function Sidebar() {
         <div className="fixed inset-x-0 bottom-0 top-16 z-40 overflow-y-auto bg-white lg:hidden dark:bg-slate-950">
           {renderNav("mobile-navigation")}
           <EngineNote />
+          {authEnabled && <SignOutButton busy={signingOut} onSignOut={signOut} />}
         </div>
       )}
 
@@ -175,6 +209,7 @@ export function Sidebar() {
           {pathname.startsWith("/settings") && !collapsed && <SettingsSectionNavigation />}
         </div>
         {!collapsed && <EngineNote />}
+        {authEnabled && <SignOutButton compact={collapsed} busy={signingOut} onSignOut={signOut} />}
         <button
           type="button"
           onClick={toggleCollapsed}
@@ -214,6 +249,42 @@ function SettingsSectionNavigation() {
         ))}
       </div>
     </nav>
+  );
+}
+
+/**
+ * Ends the session.
+ *
+ * The endpoint that clears the cookie has existed since sign-in was added and
+ * nothing ever called it, so the only way out of a signed-in dashboard was to
+ * clear the cookie by hand or wait twelve hours for it to lapse. A full page
+ * load afterwards rather than a client navigation, so nothing cached for the
+ * signed-in operator is still on screen for whoever signs in next.
+ */
+function SignOutButton({
+  compact = false,
+  busy,
+  onSignOut,
+}: {
+  compact?: boolean;
+  busy: boolean;
+  onSignOut: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSignOut}
+      disabled={busy}
+      aria-label="Sign out"
+      title={compact ? "Sign out" : undefined}
+      className={`flex min-h-12 w-full items-center border-t border-slate-200 text-xs font-bold text-slate-500 hover:bg-slate-100 disabled:opacity-60 dark:border-slate-800 dark:text-slate-400 dark:hover:bg-slate-900 ${
+        compact ? "justify-center" : "gap-2 px-5"
+      }`}
+      style={{ minHeight: "var(--control-height)" }}
+    >
+      <RiLogoutBoxRLine className="h-5 w-5 shrink-0" />
+      {!compact && <span>{busy ? "Signing out…" : "Sign out"}</span>}
+    </button>
   );
 }
 
