@@ -82,7 +82,11 @@ const AI_PROVIDERS = [
 const EMAIL_PROVIDERS = [
   { value: "AUTO", label: "Auto", hint: "First configured of Gmail, Zoho, Resend." },
   { value: "GMAIL", label: "Gmail", hint: "OAuth2. The only provider with real mailbox drafts." },
-  { value: "ZOHO", label: "Zoho Mail (SMTP)", hint: "Works with any SMTP host, defaults to smtp.zoho.com." },
+  {
+    value: "ZOHO",
+    label: "Zoho Mail (SMTP)",
+    hint: "Any SMTP host, defaults to smtp.zoho.com. Needs outbound SMTP, which Railway allows on Pro only.",
+  },
   { value: "RESEND", label: "Resend", hint: "API key plus a verified sending domain." },
   { value: "NONE", label: "Off", hint: "Approvals still work; nothing is sent." },
 ];
@@ -412,6 +416,18 @@ export default function SettingsPage() {
           </ProviderCard>
 
           <ProviderCard title="Zoho / SMTP" active={["ZOHO", "AUTO"].includes(settings.integrations.email.provider)}>
+            {/*
+              Said before it is chosen, not after it fails. SMTP is the one
+              option here that depends on the host allowing outbound
+              connections on a mail port, and most managed hosts do not on
+              their cheaper plans. Finding that out from a refused connection
+              at the moment of the first send is the worst time to find it out.
+            */}
+            <p className="mb-4 border-l-4 border-amber-500 bg-amber-500/5 py-2 pl-3 text-xs leading-relaxed text-amber-700 dark:text-amber-400">
+              This is the only option that needs outbound SMTP, which many hosts block. On Railway it works on the Pro
+              plan and is disabled on Free, Trial and Hobby. Gmail and Resend both send over HTTPS and work on every
+              plan.
+            </p>
             <TextField
               label="SMTP host"
               value={settings.integrations.email.zoho.host}

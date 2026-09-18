@@ -141,3 +141,44 @@ describe("choosing a provider", () => {
     expect(implicit.zoho.secure).toBe(true);
   });
 });
+
+/*
+ * Outbound SMTP is blocked by most managed hosts on their cheaper plans, and
+ * what reaches the operator is "connect ECONNREFUSED ...:465", which reads as a
+ * wrong password or a broken app. Those have completely different fixes.
+ */
+describe("a refused SMTP connection says what it means", () => {
+  const cfg = {
+    zoho: { host: "smtp.zoho.com", port: 465, secure: true, user: "u", password: "p" },
+  } as never;
+
+  const failing = (message: string, code?: string) =>
+    ({
+      sendMail: async () => {
+        throw Object.assign(new Error(message), code ? { code } : {});
+      },
+      verify: async () => {
+        throw Object.assign(new Error(message), code ? { code } : {});
+      },
+    }) as never;
+
+  it("names the host and the plan when the connection never opens", async () => {
+    const provider = new ZohoProvider(cfg, failing("connect ECONNREFUSED 136.143.188.15:465", "ECONNREFUSED"));
+    await expect(provider.verify()).rejects.toThrow(/smtp\.zoho\.com:465/);
+    await expect(provider.verify()).rejects.toThrow(/Pro plan/);
+    await expect(provider.verify()).rejects.toThrow(/Resend or Gmail/);
+  });
+
+  it("says the same thing on a send, not only on the test button", async () => {
+    const provider = new ZohoProvider(cfg, failing("Network is unreachable"));
+    await expect(
+      provider.send({ to: "a@b.ng", subject: "s", body: "b", fromAddress: "me@yean.tech" }),
+    ).rejects.toThrow(/blocked by the host/);
+  });
+
+  it("leaves a rejected password alone, because that is already the truth", async () => {
+    const provider = new ZohoProvider(cfg, failing("535 Authentication Failed"));
+    await expect(provider.verify()).rejects.toThrow(/535 Authentication Failed/);
+    await expect(provider.verify()).rejects.not.toThrow(/Pro plan/);
+  });
+})
