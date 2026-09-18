@@ -190,3 +190,59 @@ describe("parsing what models actually return", () => {
     expect(() => parsePitchJson('{"subject": "S"}')).toThrow();
   });
 });
+
+/*
+ * A WhatsApp message and an email are different objects. The prompt and the
+ * template both used to produce one shape for all of them, so a chat thread got
+ * a 120-word letter signed "Kind regards, The YEAN Technologies team".
+ */
+describe("the message is shaped for the channel it goes out on", () => {
+  const chat = (channel: string): PitchContext => ({ ...ctx, outreachChannel: channel });
+
+  it("asks for a letter on email and a chat message on WhatsApp", () => {
+    const email = buildPrompt(chat("EMAIL"));
+    const whatsapp = buildPrompt(chat("WHATSAPP"));
+
+    expect(email).toContain("70 to 120 words");
+    expect(email).toContain("Kind regards,");
+
+    expect(whatsapp).toContain("45 to 80 words");
+    expect(whatsapp).not.toContain("Kind regards,");
+    expect(whatsapp).toContain("this is a chat, not a letter");
+  });
+
+  it("treats an Instagram DM the same way as WhatsApp, not the same way as email", () => {
+    const dm = buildPrompt(chat("INSTAGRAM_MANUAL"));
+    expect(dm).toContain("45 to 80 words");
+    expect(dm).not.toContain("Kind regards,");
+  });
+
+  it("keeps the house style identical on every channel", () => {
+    for (const channel of ["EMAIL", "WHATSAPP", "INSTAGRAM_MANUAL"]) {
+      const prompt = buildPrompt(chat(channel));
+      expect(prompt).toContain("No emoji anywhere");
+      expect(prompt).toContain("Never use an em dash");
+      expect(prompt).toContain("No hype words");
+    }
+  });
+
+  it("only asks for a real subject line where a subject is actually sent", () => {
+    expect(buildPrompt(chat("EMAIL"))).toContain("<email subject line");
+    expect(buildPrompt(chat("WHATSAPP"))).toContain("it is not sent on this channel");
+  });
+
+  it("writes the fallback template as a chat message too", () => {
+    const email = templatePitch(chat("EMAIL")).message;
+    const whatsapp = templatePitch(chat("WHATSAPP")).message;
+
+    expect(email).toContain("Kind regards,");
+    expect(email).toContain("The YEAN Technologies team");
+
+    expect(whatsapp).not.toContain("Kind regards,");
+    expect(whatsapp.trimEnd().endsWith("YEAN Technologies")).toBe(true);
+    // Both still open by naming the business, which is what makes it theirs.
+    expect(whatsapp.startsWith(`Hello ${ctx.businessName},`)).toBe(true);
+    // And the chat version is genuinely shorter, not merely re-signed.
+    expect(whatsapp.split(/\s+/).length).toBeLessThan(email.split(/\s+/).length);
+  });
+})

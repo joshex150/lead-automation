@@ -121,7 +121,9 @@ export function QueueCard({
       setSubject(result.lead.pitchSubject ?? "");
       setMessage(result.lead.pitchMessage ?? "");
       if (result.pitch.fallbackReason) {
-        toast.error("AI is still unavailable. The template pitch was kept.");
+        // The reason, in the toast as well as on the card. Without it the only
+        // feedback from pressing Regenerate was that it had not worked.
+        toast.error(`Could not write a new message: ${result.pitch.fallbackReason}`, { duration: 9000 });
       } else {
         toast.success(`New pitch written for this business with ${result.pitch.provider}.`);
       }
@@ -311,11 +313,23 @@ export function QueueCard({
               </div>
             </div>
 
+            {/*
+              The actual reason, not a paraphrase of it.
+              This said "the AI provider was unavailable, regenerate it after
+              the provider recovers" whatever had happened, so an operator whose
+              key was wrong, whose model name did not exist, or who was over
+              their quota was told to wait for a recovery that was never going
+              to come, and pressing Regenerate produced the same sentence again.
+              The provider's own words are the only thing that says which it is.
+            */}
             {lead.pitchFallbackReason && (
-              <p className="mb-4 break-words border border-amber-500/30 bg-amber-500/5 p-3 text-xs leading-relaxed text-amber-700 [overflow-wrap:anywhere] dark:text-amber-400">
-                The AI provider was unavailable, so this lead has a safe template pitch. You can regenerate it after the
-                provider recovers.
-              </p>
+              <div className="mb-4 break-words border border-amber-500/30 bg-amber-500/5 p-3 text-xs leading-relaxed text-amber-700 [overflow-wrap:anywhere] dark:text-amber-400">
+                <p className="font-bold">This lead has the built-in template message, not an AI-written one.</p>
+                <p className="mt-1">
+                  The writer said: <span className="font-semibold">{lead.pitchFallbackReason}</span>
+                </p>
+                <p className="mt-1.5 opacity-90">{fallbackAdvice(lead.pitchFallbackReason)}</p>
+              </div>
             )}
 
             {/*
@@ -452,6 +466,36 @@ export function QueueCard({
       )}
     </article>
   );
+}
+
+/**
+ * What to do about it, read off what the provider actually said.
+ *
+ * Every one of these has a different answer, and the old wording gave the same
+ * one to all of them. A wrong key never recovers on its own; a rate limit
+ * always does.
+ */
+function fallbackAdvice(reason: string): string {
+  const text = reason.toLowerCase();
+  if (/\b401\b|unauthor|invalid[_ ]?api[_ ]?key|authentication/.test(text)) {
+    return "That reads as a rejected API key. Check the key in Settings, then use Test to confirm it before regenerating.";
+  }
+  if (/\b404\b|model.*not.*(found|exist)|unknown model|does not exist/.test(text)) {
+    return "That reads as a model name the provider does not recognise. Correct the model in Settings, then use Test.";
+  }
+  if (/\b429\b|rate.?limit|quota|insufficient[_ ]?quota|billing/.test(text)) {
+    return "That is a rate or quota limit. It clears on its own, unless it is a billing limit, in which case it will not.";
+  }
+  if (/unsupported|unrecognized|not supported|invalid.*parameter/.test(text)) {
+    return "The provider rejected one of the request's settings. This usually means the model expects different parameters; check the model name in Settings.";
+  }
+  if (/json|parse|empty response/.test(text)) {
+    return "The provider answered but the reply could not be read as a message. Regenerating often works; a different model is the fix if it keeps happening.";
+  }
+  if (/timeout|timed out|aborted|fetch failed|network|enotfound|econnrefused/.test(text)) {
+    return "That is a connection problem rather than a rejection. Regenerating usually works once the provider or the network settles.";
+  }
+  return "Regenerate to try again. If the same thing comes back, the answer is in Settings under the AI provider.";
 }
 
 const ROUTE_ICONS = {

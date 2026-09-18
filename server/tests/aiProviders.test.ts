@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  _resetEndpointQuirks,
   callAnthropic,
   callOpenAICompatible,
   runAiPrompt,
@@ -150,5 +151,91 @@ describe("sanitizeProse (house style enforced on model output)", () => {
   });
   it("leaves clean prose untouched", () => {
     expect(sanitizeProse("A plain sentence, nothing fancy.")).toBe("A plain sentence, nothing fancy.");
+  });
+});
+
+describe("providers that reject the standard request parameters", () => {
+  beforeEach(() => {
+    _resetEndpointQuirks();
+  });
+
+  const ai = {
+    provider: "openai" as const,
+    apiKey: "k",
+    model: "a-newer-model",
+    baseUrl: "https://api.openai.com/v1",
+  };
+
+  const ok = () =>
+    new Response(JSON.stringify({ choices: [{ message: { content: '{"observation":"o","subject":"s","message":"m"}' } }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+  it("retries with max_completion_tokens when the model demands it", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      bodies.push(body);
+      if ("max_tokens" in body) {
+        return new Response(
+          JSON.stringify({
+            error: { message: "Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead." },
+          }),
+          { status: 400 },
+        );
+      }
+      return ok();
+    }) as unknown as typeof fetch;
+
+    const result = await callOpenAICompatible("prompt", ai, fetchImpl);
+    expect(result.text).toContain("observation");
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]).toHaveProperty("max_completion_tokens", 600);
+    expect(bodies[1]).not.toHaveProperty("max_tokens");
+  });
+
+  it("drops temperature when the model only accepts its default", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      bodies.push(body);
+      if ("temperature" in body) {
+        return new Response(
+          JSON.stringify({ error: { message: "Unsupported value: 'temperature' does not support 0.7 with this model." } }),
+          { status: 400 },
+        );
+      }
+      return ok();
+    }) as unknown as typeof fetch;
+
+    await callOpenAICompatible("prompt", ai, fetchImpl);
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]).not.toHaveProperty("temperature");
+  });
+
+  it("only pays for the discovery once, then sends the accepted shape straight away", async () => {
+    let calls = 0;
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      calls++;
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      if ("max_tokens" in body) {
+        return new Response(JSON.stringify({ error: { message: "use 'max_completion_tokens' instead" } }), { status: 400 });
+      }
+      return ok();
+    }) as unknown as typeof fetch;
+
+    await callOpenAICompatible("prompt", ai, fetchImpl);
+    expect(calls).toBe(2);
+    await callOpenAICompatible("prompt", ai, fetchImpl);
+    // The second pitch does not repeat the rejected form.
+    expect(calls).toBe(3);
+  });
+
+  it("still fails fast on a rejection it cannot correct, so the reason reaches the operator", async () => {
+    const fetchImpl = (async () =>
+      new Response(JSON.stringify({ error: { message: "Incorrect API key provided" } }), { status: 401 })) as unknown as typeof fetch;
+
+    await expect(callOpenAICompatible("prompt", ai, fetchImpl)).rejects.toThrow(/401.*Incorrect API key/s);
   });
 });

@@ -64,18 +64,32 @@ function normalise(phone: string | undefined | null): string | null {
   return null;
 }
 
-/** The number to open WhatsApp with, when the number looks like a mobile. */
+/**
+ * The number to open WhatsApp with, when the number looks like a mobile.
+ *
+ * The digits decide, and `whatsappAvailable` only speaks where they cannot.
+ * This used to return early on the flag, which is a cache of a decision taken
+ * when the number was first read: a number stamped with the wrong country got
+ * the flag set, and after the number was corrected the flag still drew a
+ * WhatsApp chip and a wa.me link into a number nobody owns. Where the dial code
+ * is one of the ones below, the table has already answered.
+ */
 export function whatsappNumber(lead: Pick<Lead, "phone" | "phoneNormalized" | "whatsappAvailable">): string | null {
   const number = lead.phoneNormalized ?? normalise(lead.phone);
   if (!number || !number.startsWith("+")) return null;
-  // The server already decided, and it knows the country the scan ran in.
-  if (lead.whatsappAvailable) return number;
 
   const digits = number.slice(1);
   for (const [dial, mobile] of MOBILE_BY_DIAL) {
     if (digits.startsWith(dial)) return mobile.test(digits.slice(dial.length)) ? number : null;
   }
-  return null;
+
+  /*
+   * North America and any country absent from the table reach here. A +1
+   * number cannot be classified from its digits, so the server's flag is the
+   * only evidence there is: it is set from a wa.me link found on the business's
+   * own site, which proves the number is on WhatsApp.
+   */
+  return lead.whatsappAvailable ? number : null;
 }
 
 export function contactRoutes(lead: Lead): ContactRoute[] {

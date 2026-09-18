@@ -102,10 +102,6 @@ export interface SettingsDocument extends Document {
   placesRequestsPerMinute: number;
   integrations: IntegrationSettings;
   pitch: PitchSettings;
-  /**
-   * ISO-2 country the searches run in. Only ever a default for reading a phone
-   * number written without a country code; a number that carries one keeps it.
-   */
   /** Set once the first-run onboarding wizard is completed. */
   onboardedAt: Date | null;
   updatedAt: Date;

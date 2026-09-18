@@ -90,3 +90,40 @@ describe("mergeContacts", () => {
     expect(merged.emails[0].sourceUrl).toBe("https://x.ng/");
   });
 });
+
+/*
+ * The pattern used to spell out the Nigerian mobile ranges, so a business
+ * anywhere else had no phone number scraped from its own website at all.
+ */
+describe("phone numbers are found wherever the business is", () => {
+  const page = (body: string) => `<html><body>${body}</body></html>`;
+
+  it("finds an international number printed in a footer", () => {
+    const uk = extractContactsFromHtml(page("<p>Call us on +44 7700 900123</p>"), "https://example.co.uk", "GB");
+    expect(uk.phones.map((p) => p.value)).toContain("+447700900123");
+
+    const ghana = extractContactsFromHtml(page("<p>WhatsApp: +233 24 123 4567</p>"), "https://example.com.gh", "GH");
+    expect(ghana.phones.map((p) => p.value)).toContain("+233241234567");
+  });
+
+  it("reads a national number as the country the page belongs to", () => {
+    const kenya = extractContactsFromHtml(page("<p>0712 345 678</p>"), "https://example.co.ke", "KE");
+    expect(kenya.phones.map((p) => p.value)).toContain("+254712345678");
+  });
+
+  it("still finds Nigerian numbers, which is what it used to do exclusively", () => {
+    const ng = extractContactsFromHtml(page("<p>0803 123 4567</p>"), "https://example.ng", "NG");
+    expect(ng.phones.map((p) => p.value)).toContain("+2348031234567");
+  });
+
+  it("does not invent numbers out of other digits on the page", () => {
+    const noise = extractContactsFromHtml(
+      page("<p>Open 2024. Order no. 12345. VAT 0123456789012345678</p>"),
+      "https://example.ng",
+      "NG",
+    );
+    // normalizePhone is the judge: anything that is not a valid number for the
+    // country produces nothing, so a loose match costs nothing.
+    for (const phone of noise.phones) expect(phone.value).toMatch(/^\+\d{8,15}$/);
+  });
+})

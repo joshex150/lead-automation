@@ -19,7 +19,7 @@ import { PitchGroupCache, type GroupedPitch } from "../pitch/pitchGroups.js";
 import { assignChannel } from "../outreach/channel.js";
 import { isSuppressed } from "../suppression.js";
 import { normalizeBusinessName } from "../../utils/text.js";
-import { DEFAULT_COUNTRY, countryFromAddress, normalizePhone } from "../../utils/phone.js";
+import { DEFAULT_COUNTRY, countryFromAddress, countryOf, normalizePhone } from "../../utils/phone.js";
 import { mapWithConcurrency } from "../../utils/async.js";
 import { getCheckerRuntime, getPlacesKey } from "../../config/runtime.js";
 import { runExtraSources, type SourceRunStats } from "../discovery/sources/runSources.js";
@@ -776,7 +776,7 @@ export async function repairOutreachChannels(limit = 5000): Promise<{ checked: n
     pipelineStage: { $in: ["QUALIFIED", "PENDING_APPROVAL"] },
     optedOut: { $ne: true },
   })
-    .select("email instagramUsername phone phoneNormalized whatsappAvailable outreachChannel")
+    .select("email instagramUsername phone phoneNormalized whatsappAvailable outreachChannel address")
     .limit(limit);
 
   /*
@@ -789,12 +789,27 @@ export async function repairOutreachChannels(limit = 5000): Promise<{ checked: n
   for (const lead of leads) {
     const before = lead.outreachChannel;
     const beforeFlag = lead.whatsappAvailable;
+    const beforeNumber = lead.phoneNormalized;
+
+    const correctedNumber = correctlyStampedPhone(lead);
+    if (correctedNumber) lead.phoneNormalized = correctedNumber;
+
     assignChannel(lead);
-    if (lead.outreachChannel !== before || lead.whatsappAvailable !== beforeFlag) {
+    if (
+      lead.outreachChannel !== before ||
+      lead.whatsappAvailable !== beforeFlag ||
+      lead.phoneNormalized !== beforeNumber
+    ) {
       writes.push({
         updateOne: {
           filter: { _id: lead._id },
-          update: { $set: { outreachChannel: lead.outreachChannel, whatsappAvailable: lead.whatsappAvailable } },
+          update: {
+            $set: {
+              outreachChannel: lead.outreachChannel,
+              whatsappAvailable: lead.whatsappAvailable,
+              ...(lead.phoneNormalized !== beforeNumber ? { phoneNormalized: lead.phoneNormalized } : {}),
+            },
+          },
         },
       });
     }
@@ -805,6 +820,39 @@ export async function repairOutreachChannels(limit = 5000): Promise<{ checked: n
     logger.info({ checked: leads.length, corrected: writes.length }, "outreach channels repaired");
   }
   return { checked: leads.length, corrected: writes.length };
+}
+
+/**
+ * A number stamped with the wrong country, put right, or null if it is fine.
+ *
+ * Every number used to be normalised against one account-wide default, so a
+ * scan covering several countries stamped +234 on all of them: a ten-digit
+ * American or Egyptian number became a Nigerian mobile that does not exist, and
+ * the WhatsApp route offered for it went nowhere. Re-discovering the business
+ * does not fix it, because a business already on file is a duplicate and its
+ * fields are left alone, so the correction has to happen here.
+ *
+ * Deliberately narrow. It only acts when the address says which country the
+ * business is in, the stored number claims a different one, and the raw number
+ * as found reads cleanly as the country the business is actually in. A number
+ * written with its own dial code keeps it, so a genuine foreign contact for a
+ * local business is never "corrected" into the wrong thing.
+ */
+function correctlyStampedPhone(lead: {
+  address?: string | null;
+  phone?: string | null;
+  phoneNormalized?: string | null;
+}): string | null {
+  if (!lead.phone || !lead.phoneNormalized) return null;
+  const home = countryFromAddress(lead.address);
+  if (!home) return null;
+
+  const stored = countryOf(lead.phoneNormalized);
+  if (stored?.iso === home.iso) return null;
+
+  const corrected = normalizePhone(lead.phone, home.iso);
+  if (!corrected || corrected === lead.phoneNormalized) return null;
+  return countryOf(corrected)?.iso === home.iso ? corrected : null;
 }
 
 export interface DraftPendingResult {

@@ -198,7 +198,18 @@ export async function searchPlaces(
           place.location?.latitude != null && place.location?.longitude != null
             ? { lat: place.location.latitude, lng: place.location.longitude }
             : undefined,
-        phone: place.nationalPhoneNumber ?? place.internationalPhoneNumber,
+        /*
+         * The international form first, because it carries its own country.
+         *
+         * Places returns both. The national one ("024 123 4567") says nothing
+         * about where it is, so reading it depended entirely on recognising the
+         * country in the formatted address, and when that failed the number was
+         * read as the default: a ten-digit American number came out as
+         * +234 4155552671, a Nigerian mobile that does not exist. The
+         * international one ("+1 415-555-2671") cannot be misread, and every
+         * country Places serves is covered by it.
+         */
+        phone: place.internationalPhoneNumber ?? place.nationalPhoneNumber,
         internationalPhone: place.internationalPhoneNumber,
         websiteUrl: place.websiteUri,
         googleMapsUrl: place.googleMapsUri,

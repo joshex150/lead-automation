@@ -13,7 +13,7 @@ import { PipelineJob } from "../src/models/PipelineJob.js";
 import { PipelineLease } from "../src/models/PipelineLease.js";
 import { SearchRun } from "../src/models/SearchRun.js";
 import { getSettings } from "../src/models/Settings.js";
-import { processLead } from "../src/services/pipeline/runPipeline.js";
+import { processLead, repairOutreachChannels } from "../src/services/pipeline/runPipeline.js";
 import { runFollowUps } from "../src/services/outreach/followUp.js";
 
 let mongod: MongoMemoryServer | null = null;
@@ -1412,5 +1412,74 @@ describe("importing while the pipeline is busy", () => {
     // The audit could not start, and that is reported beside the import.
     expect(res.body.processingError).toBeTruthy();
     expect(await Lead.countDocuments({ businessName: "Busy Import Co" })).toBe(1);
+  });
+});
+
+describe("numbers already stamped with the wrong country", () => {
+  beforeEach(async () => {
+    await Lead.deleteMany({});
+  });
+
+  it("are put right by the repair sweep, since re-discovery leaves a known lead alone", async () => {
+    // What a multi-country scan produced before: an American number read as a
+    // Nigerian one, because both national forms are ten digits.
+    const wrong = await makeLead({
+      googlePlaceId: "stamp-1",
+      businessName: "Golden Gate Grill",
+      businessNameNormalized: "golden gate grill",
+      city: "San Francisco",
+      address: "500 Market St, San Francisco, CA, United States",
+      phone: "(415) 555-2671",
+      phoneNormalized: "+2344155552671",
+      whatsappAvailable: true,
+      outreachChannel: "WHATSAPP",
+      pipelineStage: "PENDING_APPROVAL",
+      approval: { status: "PENDING" },
+      pitchMessage: "A note.",
+    });
+
+    const result = await repairOutreachChannels();
+    expect(result.corrected).toBeGreaterThan(0);
+
+    const after = await Lead.findById(wrong._id);
+    expect(after?.phoneNormalized).toBe("+14155552671");
+    // A US number cannot be told apart from a landline, so it is offered as a
+    // phone contact rather than claimed as a WhatsApp one.
+    expect(after?.outreachChannel).toBe("NONE");
+  });
+
+  it("leaves a number that states its own country alone", async () => {
+    const visiting = await makeLead({
+      googlePlaceId: "stamp-2",
+      businessNameNormalized: "visiting",
+      address: "1 Adeola Odeku St, Lagos, Nigeria",
+      phone: "+233 24 123 4567",
+      phoneNormalized: "+233241234567",
+      pipelineStage: "PENDING_APPROVAL",
+      approval: { status: "PENDING" },
+      pitchMessage: "A note.",
+    });
+
+    await repairOutreachChannels();
+    const after = await Lead.findById(visiting._id);
+    expect(after?.phoneNormalized).toBe("+233241234567");
+  });
+
+  it("leaves a correctly stamped local number alone", async () => {
+    const fine = await makeLead({
+      googlePlaceId: "stamp-3",
+      businessNameNormalized: "fine",
+      address: "12 Trans Amadi Rd, Port Harcourt, Rivers, Nigeria",
+      phone: "0803 123 4567",
+      phoneNormalized: "+2348031234567",
+      pipelineStage: "PENDING_APPROVAL",
+      approval: { status: "PENDING" },
+      pitchMessage: "A note.",
+    });
+
+    await repairOutreachChannels();
+    const after = await Lead.findById(fine._id);
+    expect(after?.phoneNormalized).toBe("+2348031234567");
+    expect(after?.outreachChannel).toBe("WHATSAPP");
   });
 });

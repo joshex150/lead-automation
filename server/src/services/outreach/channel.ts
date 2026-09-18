@@ -1,4 +1,4 @@
-import { DEFAULT_COUNTRY, isLikelyMobile, normalizePhone } from "../../utils/phone.js";
+import { DEFAULT_COUNTRY, countryFromAddress, countryOf, isLikelyMobile, normalizePhone } from "../../utils/phone.js";
 import type { LeadDocument } from "../../models/Lead.js";
 import type { OutreachChannel } from "../../types.js";
 
@@ -8,6 +8,8 @@ interface ContactRoutes {
   whatsappAvailable?: boolean;
   phone?: string | null;
   phoneNormalized?: string | null;
+  /** The business's own address, which is what says which country it is in. */
+  address?: string | null;
 }
 
 /**
@@ -22,11 +24,31 @@ interface ContactRoutes {
  * only a cache of it.
  */
 export function whatsappReachable(lead: ContactRoutes): boolean {
-  if (lead.whatsappAvailable) return Boolean(lead.phoneNormalized ?? lead.phone);
-  // phoneNormalized is written at discovery with the configured country;
-  // this fallback only covers a lead stored before that ran.
-  const normalized = lead.phoneNormalized ?? (lead.phone ? normalizePhone(lead.phone, DEFAULT_COUNTRY) : null);
-  return isLikelyMobile(normalized);
+  /*
+   * The number decides, in both directions. The flag is only a cache of it.
+   *
+   * This used to answer from the flag first and return early, so a flag set
+   * wrongly could never be unset: `assignChannel` only ever turns it on. A
+   * number mis-stamped as a Nigerian mobile got `whatsappAvailable` set, and
+   * once the number was corrected to the American one it always was, the lead
+   * still advertised a WhatsApp route and a wa.me link into nothing.
+   *
+   * The business's own address says which country to read a national number as,
+   * and the house default only fills the silence, which is the hand-typed
+   * import case. A number carrying its own dial code keeps it either way.
+   */
+  const country = countryFromAddress(lead.address)?.iso ?? DEFAULT_COUNTRY;
+  const normalized = lead.phoneNormalized ?? (lead.phone ? normalizePhone(lead.phone, country) : null);
+  if (isLikelyMobile(normalized)) return true;
+
+  /*
+   * The flag still counts as evidence where the digits cannot answer: a wa.me
+   * link found on the business's own site proves the number is on WhatsApp even
+   * when it belongs to a country whose mobile ranges this build has no table
+   * for. Where the country IS known, the table has already spoken and the flag
+   * does not get to overrule it.
+   */
+  return Boolean(lead.whatsappAvailable && normalized && !countryOf(normalized));
 }
 
 /**
@@ -62,9 +84,15 @@ export function contactRoutes(lead: ContactRoutes): Array<"EMAIL" | "INSTAGRAM" 
   return routes;
 }
 
-/** Sets the channel and keeps the WhatsApp flag in step with the number. */
+/**
+ * Sets the channel and keeps the WhatsApp flag in step with the number.
+ *
+ * The flag is assigned, not only raised. It used to be set true and never set
+ * back, so every correction to a number left the old answer standing on the
+ * lead for good.
+ */
 export function assignChannel(lead: LeadDocument): OutreachChannel {
-  if (!lead.whatsappAvailable && whatsappReachable(lead)) lead.whatsappAvailable = true;
+  lead.whatsappAvailable = whatsappReachable(lead);
   lead.outreachChannel = preferredChannel(lead);
   return lead.outreachChannel;
 }

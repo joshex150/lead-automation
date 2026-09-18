@@ -77,9 +77,23 @@ export function extractContactsFromHtml(html: string, sourceUrl: string, country
     }
   }
 
-  // 3) Nigerian phone patterns in visible text
-  const phoneMatches = bodyText.match(/(?:\+?234|0)[\s-]?[789][01][\s-]?\d[\s-]?\d{3}[\s-]?\d{4}/g) ?? [];
-  for (const raw of phoneMatches.slice(0, 10)) {
+  /*
+   * 3) Phone numbers in visible text, from any country.
+   *
+   * This pattern used to spell out the Nigerian mobile ranges, so a Ghanaian,
+   * Kenyan or British business had no phone number extracted from its own
+   * website at all: the site said "+44 7700 900123" in its footer and the lead
+   * came out with no phone, no WhatsApp route, and often no way to reach it.
+   *
+   * The shape is now generic, any plausible international or national run of
+   * digits, and normalizePhone decides what is real: it knows the country's
+   * lengths and dial code, and returns null for anything that does not fit. A
+   * loose match that turns out not to be a number simply produces nothing,
+   * which is the right way round for a scraper.
+   */
+  const phoneMatches =
+    bodyText.match(/(?:\+|00)\d[\d\s().-]{6,18}\d|\b0\d[\d\s().-]{6,14}\d\b/g) ?? [];
+  for (const raw of phoneMatches.slice(0, 20)) {
     const phone = normalizePhone(raw, country);
     if (phone && !seen.phone.has(phone)) {
       seen.phone.add(phone);
