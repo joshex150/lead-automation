@@ -771,7 +771,9 @@ async function processPendingLeadsUnlocked(
  * cheap idempotent sweep means those leads heal on the next pass instead of
  * needing a migration, and it costs nothing once everything already agrees.
  */
-export async function repairOutreachChannels(limit = 5000): Promise<{ checked: number; corrected: number }> {
+export async function repairOutreachChannels(
+  limit = 5000,
+): Promise<{ checked: number; corrected: number; rewritten: number }> {
   const leads = await Lead.find({
     pipelineStage: { $in: ["QUALIFIED", "PENDING_APPROVAL"] },
     optedOut: { $ne: true },
@@ -819,7 +821,58 @@ export async function repairOutreachChannels(limit = 5000): Promise<{ checked: n
     await Lead.bulkWrite(writes, { ordered: false });
     logger.info({ checked: leads.length, corrected: writes.length }, "outreach channels repaired");
   }
-  return { checked: leads.length, corrected: writes.length };
+
+  /*
+   * A message written for the wrong channel is sent back to be rewritten.
+   *
+   * Correcting the channel is only half of it. Five hundred leads were routed
+   * to WhatsApp while holding a 120-word letter closing "Kind regards, The YEAN
+   * Technologies team", which is what a chat thread least wants to receive, and
+   * nothing would ever have replaced it: a lead with a message on it is a lead
+   * the drafting pass considers done.
+   *
+   * Clearing the message and putting the lead back to QUALIFIED is what
+   * draftPendingPitches looks for, and it runs immediately after this in the
+   * same pass, so the lead has its new message before anyone sees the queue.
+   */
+  const mismatched = await Lead.find({
+    pipelineStage: "PENDING_APPROVAL",
+    optedOut: { $ne: true },
+    outreachChannel: { $in: ["WHATSAPP", "INSTAGRAM_MANUAL"] },
+    pitchMessage: { $nin: [null, ""] },
+  })
+    .select("outreachChannel pitchMessage")
+    .limit(limit);
+
+  const rewrite = mismatched
+    .filter((lead) => !messageSuitsChannel(lead.pitchMessage, lead.outreachChannel))
+    .map((lead) => lead._id);
+
+  if (rewrite.length > 0) {
+    await Lead.updateMany(
+      { _id: { $in: rewrite } },
+      { $set: { pipelineStage: "QUALIFIED" }, $unset: { pitchMessage: 1, pitchSubject: 1 } },
+    );
+    logger.info({ count: rewrite.length }, "messages written for the wrong channel, queued to be rewritten");
+  }
+
+  return { checked: leads.length, corrected: writes.length, rewritten: rewrite.length };
+}
+
+/**
+ * Whether the stored message is written for the channel it will go out on.
+ *
+ * Only the one direction, deliberately. A letter sign-off in a chat is
+ * unmistakable and both writers of chat messages, the model and the built-in
+ * template, are incapable of producing one, so rewriting converges. The reverse
+ * test, "this email is too informal", has no such tell: judging it by the
+ * absence of a phrase would rewrite good emails for ever, one call per lead per
+ * scan, and never settle.
+ */
+export function messageSuitsChannel(message: string | null | undefined, channel: string): boolean {
+  if (!message) return true;
+  const chat = channel === "WHATSAPP" || channel === "INSTAGRAM_MANUAL";
+  return !chat || !/kind regards/i.test(message);
 }
 
 /**

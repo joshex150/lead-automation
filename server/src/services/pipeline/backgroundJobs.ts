@@ -109,10 +109,48 @@ const JOB_HEARTBEAT_MS = 15_000;
  */
 const JOB_STALLED_AFTER_MS = 12 * 60_000;
 
+/**
+ * How much of the whole job each phase is worth.
+ *
+ * The bar used to be driven straight from `current / total`, and those two
+ * change meaning when the phase does: during discovery they count search
+ * queries, during processing they count leads. A full scan therefore ran the
+ * bar up to 100% on eighteen queries, then dropped it to 0% and started again
+ * on four hundred leads, which reads as the scan restarting itself. Drafting
+ * later moved the denominator again, so it could also run backwards.
+ *
+ * One number across the whole job instead, with each phase given the share of
+ * it that phase is actually worth. Discovery is quick and processing is where
+ * the minutes go, so they are not weighted evenly.
+ */
+function phaseWeights(type: PipelineJobType): { discovery: number; processing: number } {
+  if (type === "PROCESS") return { discovery: 0, processing: 1 };
+  if (type === "DISCOVERY") return { discovery: 1, processing: 0 };
+  return { discovery: 0.25, processing: 0.75 };
+}
+
 async function executePipelineJob(job: PipelineJobDocument): Promise<void> {
   const jobId = String(job._id);
   let discovery: DiscoverResult | undefined;
   let processing: BatchProcessResult | undefined;
+
+  const weights = phaseWeights(job.type);
+  /*
+   * The bar never goes backwards. Every source of progress here is an estimate
+   * of something whose size is discovered as it goes: the processing total
+   * grows when drafting is added to it, and a resumed run can find more work
+   * than it planned for. Letting the number fall would be honest about the
+   * estimate and useless to the person watching, who reads a bar that retreats
+   * as a failure.
+   */
+  let reported = 0;
+  const percentOf = (phase: "discovery" | "processing", current: number, total: number): number => {
+    const share = total > 0 ? Math.min(1, Math.max(0, current / total)) : 0;
+    const base = phase === "processing" ? weights.discovery : 0;
+    const next = Math.round((base + share * weights[phase]) * 100);
+    reported = Math.max(reported, Math.min(99, next));
+    return reported;
+  };
 
   /*
    * A beat on a timer, not only on progress.
@@ -153,6 +191,7 @@ async function executePipelineJob(job: PipelineJobDocument): Promise<void> {
       await updateJob(jobId, {
         phase: "DISCOVERY",
         searchRunId: progress.runId,
+        "progress.percent": percentOf("discovery", progress.current, progress.total),
         "progress.current": progress.current,
         "progress.total": progress.total,
         "progress.failedQueries": progress.failed,
@@ -176,6 +215,7 @@ async function executePipelineJob(job: PipelineJobDocument): Promise<void> {
     }) => {
       await updateJob(jobId, {
         phase: "PROCESSING",
+        "progress.percent": percentOf("processing", progress.current, progress.total),
         "progress.current": progress.current,
         "progress.total": progress.total,
         "progress.processed": progress.processed,
@@ -228,6 +268,8 @@ async function executePipelineJob(job: PipelineJobDocument): Promise<void> {
           phase: "COMPLETE",
           finishedAt: new Date(),
           heartbeatAt: new Date(),
+          // Finished is 100, whatever the estimates along the way said.
+          "progress.percent": 100,
           ...(discovery?.runId ? { searchRunId: discovery.runId } : {}),
           "progress.current": processing?.processed ?? discovery?.completedQueries ?? 0,
           "progress.total":
@@ -278,6 +320,9 @@ async function executePipelineJob(job: PipelineJobDocument): Promise<void> {
           ...(cancelled ? {} : { error: message }),
           finishedAt: new Date(),
           heartbeatAt: new Date(),
+          // It stopped here, so the bar stops here too rather than sitting at
+          // a percentage that implies it is still going.
+          "progress.percent": reported,
           "progress.message": cancelled ? "Stopped before it finished" : message,
         },
         $unset: { activeKey: 1 },

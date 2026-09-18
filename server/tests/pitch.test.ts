@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   applyPitchResult,
   buildPrompt,
+  correctStudioName,
   parsePitchJson,
+  sanitizeProse,
   suggestedSolutionFor,
   templatePitch,
   type PitchContext,
@@ -244,5 +246,33 @@ describe("the message is shaped for the channel it goes out on", () => {
     expect(whatsapp.startsWith(`Hello ${ctx.businessName},`)).toBe(true);
     // And the chat version is genuinely shorter, not merely re-signed.
     expect(whatsapp.split(/\s+/).length).toBeLessThan(email.split(/\s+/).length);
+  });
+})
+
+describe("house style is enforced on the model's output, not requested of it", () => {
+  it("turns the hyphen-shaped dashes into hyphens rather than cutting words in half", () => {
+    // U+2011, the non-breaking hyphen, is the one models reach for constantly.
+    expect(sanitizeProse("high‑quality images")).toBe("high-quality images");
+    expect(sanitizeProse("a well‐known brand")).toBe("a well-known brand");
+  });
+
+  it("still turns em and en dashes into punctuation", () => {
+    expect(sanitizeProse("your site — which is down — costs you")).toBe(
+      "your site, which is down, costs you",
+    );
+  });
+
+  it("removes the invisible characters that survive a paste into a chat", () => {
+    expect(sanitizeProse("one two")).toBe("one two");
+    expect(sanitizeProse("in​visible")).toBe("invisible");
+  });
+
+  it("spells the studio's own name correctly however the model spelled it", () => {
+    expect(correctStudioName("Kind regards,\nThe YEEN Technologies team")).toBe(
+      "Kind regards,\nThe YEAN Technologies team",
+    );
+    expect(correctStudioName("The YEAN Technologies team")).toBe("The YEAN Technologies team");
+    // Only where it is our name, never a word that merely looks similar.
+    expect(correctStudioName("Yean Street")).toBe("Yean Street");
   });
 })

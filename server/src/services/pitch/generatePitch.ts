@@ -178,6 +178,23 @@ const AI_TRANSIENT_CIRCUIT_MS = 2 * 60_000;
 const aiLimiters = new Map<string, AdaptiveRateLimiter>();
 const aiCircuits = new Map<string, { until: number; reason: string }>();
 
+/**
+ * The provider answered, and the answer is no use.
+ *
+ * Told apart from a transport failure because the two deserve opposite
+ * treatment. A dropped connection is worth trying again; a model that reasoned
+ * its whole budget away and returned nothing will do exactly the same thing
+ * five seconds later. Retrying it anyway is what turned one scan of 356 leads
+ * into eight hours: every lead paid the full 5, 10 and 20 second ladder to be
+ * told the same thing three times.
+ */
+export class AiOutputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AiOutputError";
+  }
+}
+
 export class AiProviderError extends Error {
   constructor(
     message: string,
@@ -270,12 +287,38 @@ export function recordAiProviderProbeSuccess(ai: ResolvedAi): void {
 interface EndpointQuirks {
   tokenField: "max_tokens" | "max_completion_tokens";
   sendTemperature: boolean;
+  /** Ask a reasoning model to think briefly. Only sent once one is detected. */
+  sendReasoningEffort: boolean;
+  tokenBudget: number;
 }
+
+/*
+ * How much room the answer gets.
+ *
+ * A pitch is about 200 tokens of JSON, and the old budget of 600 was generous
+ * for a model that simply writes one. It is nothing at all for a reasoning
+ * model: those spend the budget thinking first, and the thinking is billed
+ * against the same cap. gpt-oss-120b used 598 of 600 tokens reasoning and
+ * returned an empty message, so every pitch failed and fell back to the
+ * template, permanently, and the only symptom was "returned an empty response".
+ *
+ * The cap is a limit rather than a target, so raising it costs nothing on a
+ * model that stops when it is done.
+ */
+const DEFAULT_TOKEN_BUDGET = 1200;
+const MAX_TOKEN_BUDGET = 4000;
+
+const DEFAULT_QUIRKS: EndpointQuirks = {
+  tokenField: "max_tokens",
+  sendTemperature: true,
+  sendReasoningEffort: false,
+  tokenBudget: DEFAULT_TOKEN_BUDGET,
+};
 
 const endpointQuirks = new Map<string, EndpointQuirks>();
 
 function quirksFor(baseUrl: string, model: string): EndpointQuirks {
-  return endpointQuirks.get(`${baseUrl}\u0000${model}`) ?? { tokenField: "max_tokens", sendTemperature: true };
+  return endpointQuirks.get(`${baseUrl}\u0000${model}`) ?? DEFAULT_QUIRKS;
 }
 
 function rememberQuirks(baseUrl: string, model: string, quirks: EndpointQuirks): void {
@@ -297,8 +340,30 @@ export function quirksFromRejection(body: string, current: EndpointQuirks): Endp
   if (current.tokenField === "max_tokens" && text.includes("max_completion_tokens")) {
     return { ...current, tokenField: "max_completion_tokens" };
   }
+  if (current.sendReasoningEffort && text.includes("reasoning_effort")) {
+    // This provider will not be asked to think less, so the only lever left is
+    // room. Go straight to the ceiling rather than creeping up to it.
+    return { ...current, sendReasoningEffort: false, tokenBudget: MAX_TOKEN_BUDGET };
+  }
   if (current.sendTemperature && text.includes("temperature")) {
     return { ...current, sendTemperature: false };
+  }
+  return null;
+}
+
+/**
+ * What to change when the model filled the whole budget and said nothing.
+ *
+ * That only happens one way: it reasoned until it ran out of room. Asking for
+ * less reasoning is the cheap fix and by far the better one, it took this from
+ * 901 reasoning tokens and 2.2 seconds to 90 and half a second, so it is tried
+ * first. More room is the fallback for a model that will not take the hint.
+ * Returns null once neither lever has anything left, and the caller reports it.
+ */
+export function quirksFromTruncation(current: EndpointQuirks): EndpointQuirks | null {
+  if (!current.sendReasoningEffort) return { ...current, sendReasoningEffort: true };
+  if (current.tokenBudget < MAX_TOKEN_BUDGET) {
+    return { ...current, tokenBudget: Math.min(MAX_TOKEN_BUDGET, current.tokenBudget * 2) };
   }
   return null;
 }
@@ -311,9 +376,12 @@ export async function callOpenAICompatible(
   const isOpenAI = ai.baseUrl.startsWith("https://api.openai.com");
   let quirks = quirksFor(ai.baseUrl, ai.model);
 
-  // At most one retry per parameter we know how to correct, so a genuinely
-  // bad request still fails quickly rather than looping.
-  for (let attempt = 0; attempt < 3; attempt++) {
+  /*
+   * Each pass either returns an answer or learns one thing and tries again, and
+   * every lever is finite: two parameter corrections and two escalations. A
+   * genuinely broken request still fails in a few seconds rather than looping.
+   */
+  for (let attempt = 0; attempt < 5; attempt++) {
     const res = await fetchImpl(`${ai.baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
@@ -324,7 +392,8 @@ export async function callOpenAICompatible(
         model: ai.model,
         messages: [{ role: "user", content: prompt }],
         ...(quirks.sendTemperature ? { temperature: 0.7 } : {}),
-        [quirks.tokenField]: 600,
+        ...(quirks.sendReasoningEffort ? { reasoning_effort: "low" } : {}),
+        [quirks.tokenField]: quirks.tokenBudget,
         ...(isOpenAI ? { response_format: { type: "json_object" } } : {}),
       }),
       signal: AbortSignal.timeout(45000),
@@ -335,7 +404,7 @@ export async function callOpenAICompatible(
       const adjusted = res.status === 400 ? quirksFromRejection(body, quirks) : null;
       if (adjusted) {
         logger.info(
-          { provider: ai.provider, model: ai.model, tokenField: adjusted.tokenField, temperature: adjusted.sendTemperature },
+          { provider: ai.provider, model: ai.model, ...adjusted },
           "provider rejected a request parameter, retrying the way it asked",
         );
         quirks = adjusted;
@@ -349,14 +418,56 @@ export async function callOpenAICompatible(
       );
     }
 
-    rememberQuirks(ai.baseUrl, ai.model, quirks);
-    const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
-    const text = data.choices?.[0]?.message?.content;
-    if (!text) throw new Error(`${ai.provider} returned an empty response`);
-    return { text, provider: ai.provider, model: ai.model };
+    const data = (await res.json()) as {
+      choices?: Array<{ message?: { content?: string }; finish_reason?: string }>;
+    };
+    const choice = data.choices?.[0];
+    const text = choice?.message?.content;
+
+    /*
+     * Running out of room is a failure whether it cut the answer off at the
+     * start or in the middle.
+     *
+     * Checking only for an empty message missed the more common half of it: a
+     * reasoning model that thinks for most of its budget still emits the
+     * opening of the JSON before the cap bites, so what arrives is a valid
+     * first line and no closing brace. That parses to nothing and was reported
+     * as "No JSON object in AI response", which sounds like the model wrote
+     * prose when in fact it wrote exactly what was asked and was cut off.
+     */
+    const truncated = choice?.finish_reason === "length";
+    if (text && !truncated) {
+      rememberQuirks(ai.baseUrl, ai.model, quirks);
+      return { text, provider: ai.provider, model: ai.model };
+    }
+
+    const escalated = truncated ? quirksFromTruncation(quirks) : null;
+    if (escalated) {
+      logger.info(
+        { provider: ai.provider, model: ai.model, ...escalated },
+        "model ran out of room, retrying with less reasoning or more of it",
+      );
+      quirks = escalated;
+      rememberQuirks(ai.baseUrl, ai.model, escalated);
+      continue;
+    }
+
+    // Nothing left to adjust. A partial answer is still worth handing on: the
+    // parser salvages a truncated object field by field and often gets a usable
+    // message out of it, which beats a template.
+    if (text) {
+      rememberQuirks(ai.baseUrl, ai.model, quirks);
+      return { text, provider: ai.provider, model: ai.model };
+    }
+
+    throw new AiOutputError(
+      truncated
+        ? `${ai.provider} model ${ai.model} used its entire ${quirks.tokenBudget}-token budget reasoning and produced no message. Choose a model that reasons less, or one without a reasoning step.`
+        : `${ai.provider} returned an empty response`,
+    );
   }
 
-  throw new Error(`${ai.provider} rejected every form of the request`);
+  throw new AiOutputError(`${ai.provider} did not return a usable message in any form the request was tried`);
 }
 
 export async function callAnthropic(
@@ -389,7 +500,7 @@ export async function callAnthropic(
   }
   const data = (await res.json()) as { content?: Array<{ type: string; text?: string }> };
   const text = data.content?.find((c) => c.type === "text")?.text;
-  if (!text) throw new Error("anthropic returned an empty response");
+  if (!text) throw new AiOutputError("anthropic returned an empty response");
   return { text, provider: "anthropic", model: ai.model };
 }
 
@@ -399,12 +510,39 @@ export async function callAnthropic(
  * so we normalise the output instead of trusting it.
  */
 export function sanitizeProse(text: string): string {
-  return text
-    .replace(/\s*[—–]\s*/g, ", ")
-    .replace(/[“”]/g, '"')
-    .replace(/[‘’]/g, "'")
-    .replace(/, ,/g, ",")
-    .replace(/ {2,}/g, " ");
+  return (
+    text
+      // Em and en dashes stand in for punctuation, so they become punctuation.
+      .replace(/\s*[\u2014\u2013]\s*/g, ", ")
+      /*
+       * The hyphen-shaped ones are different: they sit inside a word, as in
+       * "high-quality", so replacing them with a comma would cut the word in
+       * half. They only need to become the plain ASCII hyphen. The models reach
+       * for the non-breaking hyphen (U+2011) constantly and it was going out in
+       * messages untouched, where some mail clients and every WhatsApp client
+       * render it as a box.
+       */
+      .replace(/[\u2010\u2011\u2012\u2015]/g, "-")
+      .replace(/[\u201C\u201D]/g, '"')
+      .replace(/[\u2018\u2019]/g, "'")
+      // Other invisible punctuation that survives a copy and paste into a DM.
+      .replace(/[\u00A0\u2007\u202F]/g, " ")
+      .replace(/[\u200B-\u200D\uFEFF]/g, "")
+      .replace(/, ,/g, ",")
+      .replace(/ {2,}/g, " ")
+  );
+}
+
+/**
+ * Our own name, spelled our way.
+ *
+ * Models mangle it, and "YEEN Technologies" in the sign-off of an email going
+ * to a stranger is the one typo in the message nobody forgives. Applied to the
+ * finished text rather than asked for in the prompt, because a rule the model
+ * has to remember is a rule it will eventually forget.
+ */
+export function correctStudioName(text: string): string {
+  return text.replace(/\b(?:YEEN|YEAAN|YAEN|YEANN|Yean|yean|YEN)(?=\s+Technologies)/g, "YEAN");
 }
 
 /**
@@ -488,9 +626,10 @@ export function parsePitchJson(text: string): { observation: string; subject: st
     }
   }
 
-  const observation = sanitizeProse(String(parsed.observation ?? "").trim());
-  const subject = sanitizeProse(String(parsed.subject ?? "").trim());
-  const message = sanitizeProse(String(parsed.message ?? "").trim());
+  const clean = (value: unknown) => correctStudioName(sanitizeProse(String(value ?? "").trim()));
+  const observation = clean(parsed.observation);
+  const subject = clean(parsed.subject);
+  const message = clean(parsed.message);
   if (!subject || !message) throw new Error("AI response missing subject or message");
   return { observation, subject, message };
 }
@@ -625,7 +764,14 @@ export async function runAiPromptWithRetry(
       return result;
     } catch (err) {
       const providerError = err instanceof AiProviderError ? err : null;
-      const retryable = !providerError || providerError.status === 429 || providerError.status >= 500;
+      /*
+       * Only a fault that might not happen again is worth waiting for. An
+       * answer we cannot use is not one of those: the same request produces the
+       * same answer, so the ladder buys nothing and costs 35 seconds a lead.
+       */
+      const retryable =
+        !(err instanceof AiOutputError) &&
+        (!providerError || providerError.status === 429 || providerError.status >= 500);
       if (providerError?.status === 429) {
         limiter.blockFor(
           Math.max(MIN_AI_RATE_LIMIT_COOLDOWN_MS, providerError.retryAfterMs ?? 0),

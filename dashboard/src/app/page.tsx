@@ -830,8 +830,17 @@ function PipelineProgress({
   onStop: () => void;
   stopping: boolean;
 }) {
-  const total = Math.max(job.progress.total, 1);
-  const percent = Math.min(100, Math.round((job.progress.current / total) * 100));
+  /*
+   * The server's own figure, which is one number across the whole job and never
+   * goes backwards. Computing it here from current/total meant the bar reset to
+   * zero the moment the phase changed, because those two count queries during
+   * discovery and leads during processing. The fallback is for a job started by
+   * an older build, which has no percent on it.
+   */
+  const percent =
+    typeof job.progress.percent === "number"
+      ? Math.min(100, Math.max(0, job.progress.percent))
+      : Math.min(100, Math.round((job.progress.current / Math.max(job.progress.total, 1)) * 100));
   const phase =
     job.phase === "DISCOVERY"
       ? "Discovering businesses"

@@ -209,6 +209,8 @@ export interface PipelineJob {
   finishedAt?: string;
   heartbeatAt: string;
   progress: {
+    /** One monotonic 0-100 for the whole job. Absent on jobs from older builds. */
+    percent?: number;
     current: number;
     total: number;
     message: string;

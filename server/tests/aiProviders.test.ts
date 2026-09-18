@@ -191,7 +191,7 @@ describe("providers that reject the standard request parameters", () => {
     const result = await callOpenAICompatible("prompt", ai, fetchImpl);
     expect(result.text).toContain("observation");
     expect(bodies).toHaveLength(2);
-    expect(bodies[1]).toHaveProperty("max_completion_tokens", 600);
+    expect(bodies[1]).toHaveProperty("max_completion_tokens", 1200);
     expect(bodies[1]).not.toHaveProperty("max_tokens");
   });
 
@@ -239,3 +239,152 @@ describe("providers that reject the standard request parameters", () => {
     await expect(callOpenAICompatible("prompt", ai, fetchImpl)).rejects.toThrow(/401.*Incorrect API key/s);
   });
 });
+
+/*
+ * A reasoning model spends the token budget thinking, and the thinking counts
+ * against the same cap. gpt-oss-120b used 598 of 600 tokens reasoning and
+ * returned nothing, so every pitch failed and fell back to the template.
+ */
+describe("models that reason before answering", () => {
+  beforeEach(() => {
+    _resetEndpointQuirks();
+  });
+
+  const ai = {
+    provider: "groq" as const,
+    apiKey: "k",
+    model: "openai/gpt-oss-120b",
+    baseUrl: "https://api.groq.com/openai/v1",
+  };
+
+  const answer = (content: string, finish = "stop") =>
+    new Response(JSON.stringify({ choices: [{ message: { content }, finish_reason: finish }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+  it("asks a model that thinks itself out of room to think less", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      bodies.push(body);
+      // Empty message, stopped on the cap: it reasoned the whole budget away.
+      if (!("reasoning_effort" in body)) return answer("", "length");
+      return answer('{"observation":"o","subject":"s","message":"m"}');
+    }) as unknown as typeof fetch;
+
+    const result = await callOpenAICompatible("prompt", ai, fetchImpl);
+    expect(result.text).toContain("message");
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]).toHaveProperty("reasoning_effort", "low");
+  });
+
+  it("treats a half-written answer as running out of room, not as bad output", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      bodies.push(body);
+      // The opening of valid JSON with no closing brace: what actually arrives
+      // when the cap bites mid-sentence. This used to be reported as "No JSON
+      // object in AI response", which blames the model for being cut off.
+      if (!("reasoning_effort" in body)) return answer('{"observation":"o","subject":"s","mess', "length");
+      return answer('{"observation":"o","subject":"s","message":"m"}');
+    }) as unknown as typeof fetch;
+
+    const result = await callOpenAICompatible("prompt", ai, fetchImpl);
+    expect(result.text).toContain('"message":"m"');
+    expect(bodies).toHaveLength(2);
+  });
+
+  it("buys more room when the provider will not be asked to think less", async () => {
+    const budgets: number[] = [];
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as Record<string, number>;
+      budgets.push(body.max_tokens);
+      if ("reasoning_effort" in body) {
+        return new Response(JSON.stringify({ error: { message: "Unrecognized request argument: reasoning_effort" } }), {
+          status: 400,
+        });
+      }
+      return budgets.length > 2 ? answer('{"observation":"o","subject":"s","message":"m"}') : answer("", "length");
+    }) as unknown as typeof fetch;
+
+    await callOpenAICompatible("prompt", ai, fetchImpl);
+    // Started at the default, and ended with the ceiling after the rejection.
+    expect(budgets[0]).toBe(1200);
+    expect(budgets[budgets.length - 1]).toBe(4000);
+  });
+
+  it("gives up with an answer the operator can act on rather than looping", async () => {
+    const fetchImpl = (async () => answer("", "length")) as unknown as typeof fetch;
+    await expect(callOpenAICompatible("prompt", ai, fetchImpl)).rejects.toThrow(
+      /used its entire .* budget reasoning/,
+    );
+  });
+
+  it("does not retry a model that stopped of its own accord with nothing to say", async () => {
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls++;
+      return answer("", "stop");
+    }) as unknown as typeof fetch;
+
+    await expect(callOpenAICompatible("prompt", ai, fetchImpl)).rejects.toThrow(/empty response/);
+    // Repeating it would spend money to be told the same thing.
+    expect(calls).toBe(1);
+  });
+})
+
+/*
+ * One scan of 356 leads took eight hours. The AI was returning an empty
+ * message, which is deterministic, and the retry ladder waited 5, 10 and 20
+ * seconds to be told the same thing three more times, per lead.
+ */
+describe("what is worth waiting for and what is not", () => {
+  const sleeps: number[] = [];
+  const opts = () => ({
+    sleepImpl: async (ms: number) => {
+      sleeps.push(ms);
+    },
+    random: () => 0,
+    limiter: { waitTurn: async () => {}, blockFor: () => {}, recordSuccess: () => {} } as AiRequestLimiter,
+  });
+
+  beforeEach(() => {
+    sleeps.length = 0;
+    _resetEndpointQuirks();
+  });
+
+  it("does not wait to be told the same thing again by an answer it cannot use", async () => {
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls++;
+      return new Response(JSON.stringify({ choices: [{ message: { content: "" }, finish_reason: "stop" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    await expect(runAiPromptWithRetry("p", ai({ provider: "groq" }), { ...opts(), fetchImpl })).rejects.toThrow(
+      /empty response/,
+    );
+    expect(calls).toBe(1);
+    expect(sleeps).toEqual([]);
+  });
+
+  it("still waits out a fault that might genuinely pass", async () => {
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls++;
+      if (calls < 3) return new Response("upstream is unwell", { status: 503 });
+      return new Response(JSON.stringify({ choices: [{ message: { content: "ok" }, finish_reason: "stop" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const result = await runAiPromptWithRetry("p", ai({ provider: "groq" }), { ...opts(), fetchImpl });
+    expect(result.text).toBe("ok");
+    expect(sleeps.length).toBe(2);
+  });
+})

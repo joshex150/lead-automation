@@ -1483,3 +1483,78 @@ describe("numbers already stamped with the wrong country", () => {
     expect(after?.outreachChannel).toBe("WHATSAPP");
   });
 });
+
+describe("a message written for the wrong channel", () => {
+  beforeEach(async () => {
+    await Lead.deleteMany({});
+  });
+
+  const LETTER = "Hello Crystal Scents,\n\nA note about your website.\n\nKind regards,\nThe YEAN Technologies team";
+
+  it("is sent back to be rewritten when the lead goes out on a chat channel", async () => {
+    const lead = await makeLead({
+      googlePlaceId: "shape-1",
+      pipelineStage: "PENDING_APPROVAL",
+      approval: { status: "PENDING" },
+      outreachChannel: "WHATSAPP",
+      whatsappAvailable: true,
+      phone: "0803 123 4567",
+      phoneNormalized: "+2348031234567",
+      pitchSubject: "Your website",
+      pitchMessage: LETTER,
+      needScore: 70,
+      leadScore: 70,
+    });
+
+    const result = await repairOutreachChannels();
+    expect(result.rewritten).toBe(1);
+
+    const after = await Lead.findById(lead._id);
+    // Back to the stage the drafting pass looks for, which runs next in the
+    // same processing pass, so the queue is never seen without it.
+    expect(after?.pipelineStage).toBe("QUALIFIED");
+    expect(after?.pitchMessage).toBeFalsy();
+  });
+
+  it("leaves an email lead's letter exactly where it is", async () => {
+    const lead = await makeLead({
+      googlePlaceId: "shape-2",
+      businessNameNormalized: "shape2",
+      pipelineStage: "PENDING_APPROVAL",
+      approval: { status: "PENDING" },
+      outreachChannel: "EMAIL",
+      email: "hello@crystalscents.ng",
+      pitchMessage: LETTER,
+      needScore: 70,
+      leadScore: 70,
+    });
+
+    const result = await repairOutreachChannels();
+    expect(result.rewritten).toBe(0);
+    expect((await Lead.findById(lead._id))?.pitchMessage).toBe(LETTER);
+  });
+
+  it("leaves a chat lead that already has a chat message alone, so it settles", async () => {
+    const chat = "Hello Crystal Scents,\n\nA short note.\n\nYEAN Technologies";
+    const lead = await makeLead({
+      googlePlaceId: "shape-3",
+      businessNameNormalized: "shape3",
+      pipelineStage: "PENDING_APPROVAL",
+      approval: { status: "PENDING" },
+      outreachChannel: "WHATSAPP",
+      whatsappAvailable: true,
+      phone: "0803 123 4567",
+      phoneNormalized: "+2348031234567",
+      pitchMessage: chat,
+      needScore: 70,
+      leadScore: 70,
+    });
+
+    // Twice, because a rule that rewrites on every pass would spend an AI call
+    // per lead per scan and never converge.
+    await repairOutreachChannels();
+    const second = await repairOutreachChannels();
+    expect(second.rewritten).toBe(0);
+    expect((await Lead.findById(lead._id))?.pitchMessage).toBe(chat);
+  });
+});

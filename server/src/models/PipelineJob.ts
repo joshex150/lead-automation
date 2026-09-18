@@ -28,6 +28,15 @@ export interface PipelineJobDocument extends Document {
   /** Set by the operator to stop a run that is going nowhere. */
   cancelRequested?: boolean;
   progress: {
+    /**
+     * One monotonic 0-100 for the whole job, phases included.
+     *
+     * `current` and `total` still say what the phase is counting, which is
+     * queries during discovery and leads during processing. This is what the
+     * bar is drawn from, because those two are not comparable across a phase
+     * change and the bar used to fall back to zero at one.
+     */
+    percent: number;
     current: number;
     total: number;
     message: string;
@@ -81,6 +90,7 @@ const pipelineJobSchema = new Schema<PipelineJobDocument>(
     progressAt: { type: Date, default: Date.now },
     cancelRequested: { type: Boolean, default: false },
     progress: {
+      percent: { type: Number, default: 0 },
       current: { type: Number, default: 0 },
       total: { type: Number, default: 0 },
       message: { type: String, default: "Queued" },
