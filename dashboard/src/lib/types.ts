@@ -200,9 +200,9 @@ export type PipelineJobStatus = "QUEUED" | "RUNNING" | "COMPLETED" | "PARTIAL" |
 
 export interface PipelineJob {
   _id: string;
-  type: "FULL" | "DISCOVERY" | "PROCESS" | "RESUME_DISCOVERY";
+  type: "FULL" | "DISCOVERY" | "PROCESS" | "RESUME_DISCOVERY" | "REWRITE_PITCHES";
   status: PipelineJobStatus;
-  phase: "QUEUED" | "DISCOVERY" | "PROCESSING" | "COMPLETE";
+  phase: "QUEUED" | "DISCOVERY" | "PROCESSING" | "PITCHING" | "COMPLETE";
   searchRunId?: string;
   resumedFromRunId?: string;
   startedAt?: string;
@@ -223,6 +223,10 @@ export interface PipelineJob {
     suppressed: number;
     processingErrors: number;
     aiFallbacks: number;
+    /** REWRITE_PITCHES: messages moved off the built-in template onto AI. */
+    rewritten?: number;
+    /** Messages served from a group rather than bought again. Credits saved. */
+    reusedMessages?: number;
   };
   error?: string;
   /** Set once the operator has dismissed the report of a run that went wrong. */
@@ -237,6 +241,8 @@ export interface PipelineOperationalStatus {
   discoveredPending: number;
   /** Qualified leads still waiting for a message to be written. */
   pitchPending?: number;
+  /** Leads whose message came from the built-in template, not the AI writer. */
+  templatePitchPending?: number;
   /** Leads that failed processing often enough that nothing retries them. */
   stalledLeads?: number;
   resumableRun: {
@@ -401,4 +407,23 @@ export interface TestResult {
   reply?: string;
   sample?: string | null;
   error?: string;
+}
+
+/** One category's worth of messages still on the built-in template. */
+export interface TemplatePitchCategory {
+  category: string;
+  leads: number;
+  /** Distinct situations, so one AI call each when messages are reused. */
+  situations: number;
+  /** Leads with their own Instagram detail. Never grouped, so one call each. */
+  individual: number;
+  /** situations + individual: what rewriting this category would spend. */
+  aiCalls: number;
+  cities: string[];
+}
+
+export interface TemplatePitchSummary {
+  total: number;
+  aiCalls: number;
+  categories: TemplatePitchCategory[];
 }

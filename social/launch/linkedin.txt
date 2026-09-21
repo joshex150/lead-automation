@@ -1,0 +1,41 @@
+For the first stretch of running our studio, my entire client pipeline was other people.
+
+Someone would refer us. A business would find us on its own. Work came in, and I never had to go looking for it.
+
+That is a lovely way to run a company, right up until the month it goes quiet and you realise you have no way to make it start again. Referrals are somebody else's decision. You cannot schedule them.
+
+At some point waiting stopped being a plan. If clients were not going to come to me, I had to go to them.
+
+Which is when I found out how much work that actually is.
+
+Open Google Maps. Search "restaurants in Lagos". Click a listing. Click through to the website. Wait for it to load. Watch it load perfectly well, realise they don't need me, go back, next one.
+
+Most of what I opened was fine. The businesses that genuinely needed a website were scattered somewhere in the middle of all that, and the only way to find them was to keep clicking.
+
+Then came the writing. The first few messages were good. Somewhere after that I'd start copying the last one and changing the name, which is exactly the sort of email I delete when it lands in my own inbox.
+
+So I built the thing I kept wishing I had. It's called YEAN Leads.
+
+It pulls businesses from Google Places by city and category, then opens what each one actually has online. DNS, certificate, HTTP status, response time, mobile viewport, broken internal links. If the listing points at a Linktree, it follows the link and checks whether a real site is hiding behind it. Telling somebody they have no website when they do is the fastest way to lose the reply.
+
+Then it scores what it found. No website adds 40. A site that's down adds 40. I set the weights for us, and you'd set your own.
+
+Anything above the threshold gets a message drafted from that business's actual situation. An email reads like an email. A WhatsApp message is shorter and doesn't sign off like a letter.
+
+Then it stops and waits for me.
+
+That last part matters more to me than the rest. Nothing goes out without a person reading it and pressing approve. One follow-up after that, ever, and only if there was no reply. I wasn't trying to build a spam cannon. I was trying to stop waiting for the phone to ring.
+
+One scan of Lagos and Abuja: 18 searches, five and a half minutes, 735 businesses, 356 of them new to my database.
+
+Here's the part I didn't plan for.
+
+I built this for one studio. Mine. In one country. Two companies have since reached out asking to buy their own instance, which is not a conversation I expected to be having about a tool I wrote to solve my own problem.
+
+So I'm looking at it a bit differently now.
+
+Node, TypeScript, MongoDB and Next.js underneath. Google Places for discovery, your own AI key, Gmail or Resend for sending.
+
+If you run a studio or an agency and your pipeline is still other people, I'd genuinely like to show you around it. Comment below or send me a message.
+
+#LeadGeneration #WebDevelopment #SaaS #Nigeria #BuildInPublic

@@ -12,8 +12,14 @@ import { OutreachLog } from "../src/models/OutreachLog.js";
 import { PipelineJob } from "../src/models/PipelineJob.js";
 import { PipelineLease } from "../src/models/PipelineLease.js";
 import { SearchRun } from "../src/models/SearchRun.js";
-import { getSettings } from "../src/models/Settings.js";
-import { processLead, repairOutreachChannels } from "../src/services/pipeline/runPipeline.js";
+import { Settings, getSettings } from "../src/models/Settings.js";
+import {
+  processLead,
+  repairOutreachChannels,
+  rewriteTemplatePitches,
+  templatePitchFilter,
+  templatePitchSummary,
+} from "../src/services/pipeline/runPipeline.js";
 import { runFollowUps } from "../src/services/outreach/followUp.js";
 
 let mongod: MongoMemoryServer | null = null;
@@ -1556,5 +1562,268 @@ describe("a message written for the wrong channel", () => {
     const second = await repairOutreachChannels();
     expect(second.rewritten).toBe(0);
     expect((await Lead.findById(lead._id))?.pitchMessage).toBe(chat);
+  });
+});
+
+
+/**
+ * Leads that came out of a scan run before an AI provider was connected.
+ *
+ * They are the awkward case because nothing else in the pipeline can see them:
+ * they have a message, so the "waiting for a message" count skips them, and it
+ * is a perfectly valid message, so no error was ever recorded against them.
+ */
+describe("rewriting built-in template messages", () => {
+  async function templateLead(overrides: Record<string, unknown> = {}) {
+    return makeLead({
+      pipelineStage: "PENDING_APPROVAL",
+      approval: { status: "PENDING" },
+      outreachStatus: "NOT_CONTACTED",
+      outreachChannel: "EMAIL",
+      email: "hello@example.com",
+      websiteType: "NO_WEBSITE",
+      pitchSubject: "A website for Crystal Scents",
+      pitchMessage: "Hello Crystal Scents, ...",
+      // What generatePitch writes when no provider is configured. Crucially it
+      // records no failure reason, because nothing failed.
+      pitchModel: "template/builtin",
+      needScore: 70,
+      leadScore: 70,
+      ...overrides,
+    });
+  }
+
+  beforeEach(async () => {
+    await Lead.deleteMany({});
+    await PipelineJob.deleteMany({});
+    await PipelineLease.deleteMany({});
+  });
+
+  it("finds template messages that recorded no failure reason", async () => {
+    await templateLead();
+    expect(await Lead.countDocuments(templatePitchFilter())).toBe(1);
+  });
+
+  it("leaves AI-written messages alone", async () => {
+    await templateLead({ pitchModel: "openai/gpt-4o-mini" });
+    expect(await Lead.countDocuments(templatePitchFilter())).toBe(0);
+  });
+
+  it("picks up a message the AI tried and failed to write", async () => {
+    await templateLead({ pitchModel: "template/builtin", pitchFallbackReason: "429 rate limited" });
+    expect(await Lead.countDocuments(templatePitchFilter())).toBe(1);
+  });
+
+  /*
+   * The one that matters most. A sent message is a record of what was said to
+   * a business, and an approved one is a statement about wording somebody has
+   * read. Rewriting either underneath the operator would be silent damage.
+   */
+  it("never touches a message that has been sent or approved", async () => {
+    await templateLead({ outreachStatus: "CONTACTED", businessNameNormalized: "sent" });
+    await templateLead({ approval: { status: "APPROVED" }, businessNameNormalized: "approved" });
+    await templateLead({ optedOut: true, businessNameNormalized: "opted out" });
+    expect(await Lead.countDocuments(templatePitchFilter())).toBe(0);
+  });
+
+  it("scopes to the chosen categories, case-insensitively", async () => {
+    await templateLead({ category: "Perfume Stores", businessNameNormalized: "a" });
+    await templateLead({ category: "restaurants", businessNameNormalized: "b" });
+
+    expect(await Lead.countDocuments(templatePitchFilter({ categories: ["perfume stores"] }))).toBe(1);
+    expect(await Lead.countDocuments(templatePitchFilter({ categories: ["restaurants"] }))).toBe(1);
+    expect(await Lead.countDocuments(templatePitchFilter({ categories: ["hotels"] }))).toBe(0);
+  });
+
+  /*
+   * The summary exists to answer "what will this cost", and cost is calls, not
+   * leads. Three leads in one situation is one call; the fourth carries its own
+   * Instagram detail, is never grouped, and so costs a call of its own.
+   */
+  it("counts AI calls per situation rather than per lead", async () => {
+    for (const name of ["a", "b", "c"]) {
+      await templateLead({ businessNameNormalized: name, category: "perfume stores" });
+    }
+    await templateLead({
+      businessNameNormalized: "d",
+      category: "perfume stores",
+      instagramBio: "Niche fragrances, Port Harcourt. DM to order.",
+    });
+
+    const summary = await templatePitchSummary();
+    const row = summary.categories.find((entry) => entry.category.toLowerCase() === "perfume stores");
+    expect(row?.leads).toBe(4);
+    expect(row?.situations).toBe(1);
+    expect(row?.individual).toBe(1);
+    expect(row?.aiCalls).toBe(2);
+    expect(summary.total).toBe(4);
+  });
+
+  it("splits one category into separate situations per website problem", async () => {
+    await templateLead({ businessNameNormalized: "a", websiteType: "NO_WEBSITE" });
+    await templateLead({ businessNameNormalized: "b", websiteType: "SOCIAL_MEDIA_ONLY" });
+
+    const summary = await templatePitchSummary();
+    const row = summary.categories.find((entry) => entry.category.toLowerCase() === "perfume stores");
+    expect(row?.leads).toBe(2);
+    expect(row?.situations).toBe(2);
+  });
+
+  /*
+   * The scope reaches the preview too, which goes through an aggregation
+   * rather than a find. The case-insensitive match is a regex inside $in, and
+   * that is worth proving on the aggregation path rather than assuming it
+   * behaves the same as the count above.
+   */
+  it("scopes the preview as well as the count", async () => {
+    await templateLead({ businessNameNormalized: "a", category: "Perfume Stores" });
+    await templateLead({ businessNameNormalized: "b", category: "restaurants" });
+
+    const scoped = await templatePitchSummary({ categories: ["PERFUME STORES"] });
+    expect(scoped.total).toBe(1);
+    expect(scoped.categories).toHaveLength(1);
+
+    const byCity = await templatePitchSummary({ cities: ["port harcourt"] });
+    expect(byCity.total).toBe(2);
+    expect(await templatePitchSummary({ cities: ["Kano"] })).toMatchObject({ total: 0 });
+  });
+
+  /*
+   * With no provider configured the rewrite produces the built-in template
+   * again. Saving that would move pitchGeneratedAt, clear the trail and report
+   * a pile of leads "rewritten" without a word of them having changed.
+   */
+  it("leaves a lead untouched when the writer returns the template again", async () => {
+    const lead = await templateLead();
+    const before = (await Lead.findById(lead._id))?.pitchMessage;
+
+    const result = await rewriteTemplatePitches();
+    expect(result.matched).toBe(1);
+    expect(result.rewritten).toBe(0);
+    expect(result.stillTemplate).toBe(1);
+
+    const after = await Lead.findById(lead._id);
+    expect(after?.pitchMessage).toBe(before);
+    expect(after?.pitchGeneratedAt).toBeUndefined();
+  });
+
+  /*
+   * The whole claim of the feature, and the only test that can check it: one
+   * AI call serves every lead in a situation, and each of them still comes out
+   * addressed to its own business.
+   */
+  it("buys one message per situation and personalises it per lead", async () => {
+    // Restored exactly afterwards: the rest of the suite runs with no provider
+    // configured, and leaving one behind would change what it is testing.
+    const before = (await getSettings()).integrations?.ai;
+    await Settings.updateOne(
+      { key: "global" },
+      { $set: { "integrations.ai.provider": "OPENAI", "integrations.ai.apiKey": "test-key", "integrations.ai.model": "gpt-4o-mini" } },
+    );
+
+    const prompts: string[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+      prompts.push(String(init?.body ?? ""));
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  observation: "Shops like this are hard to find online.",
+                  subject: "A website for {{business}}",
+                  message: "Hello {{business}},\n\nWe work with shops in {{city}}. Shall we talk?",
+                }),
+              },
+            },
+          ],
+        }),
+        text: async () => "",
+      } as unknown as Response;
+    }) as typeof fetch;
+
+    try {
+      const shared = ["Alpha Scents", "Beta Scents", "Gamma Scents"];
+      for (const name of shared) {
+        await templateLead({ businessName: name, businessNameNormalized: name.toLowerCase(), city: "Lagos" });
+      }
+      // A different category is a different situation, so it buys its own.
+      await templateLead({
+        businessName: "Delta Grill",
+        businessNameNormalized: "delta grill",
+        category: "restaurants",
+        city: "Abuja",
+      });
+
+      const result = await rewriteTemplatePitches();
+
+      expect(result.rewritten).toBe(4);
+      expect(result.stillTemplate).toBe(0);
+      // Two situations, so two calls for four leads, and the other three
+      // messages were served from the group.
+      expect(prompts.length).toBe(2);
+      expect(result.aiCalls).toBe(2);
+      expect(result.reusedMessages).toBe(2);
+
+      for (const name of shared) {
+        const lead = await Lead.findOne({ businessName: name });
+        expect(lead?.pitchMessage).toContain(name);
+        expect(lead?.pitchMessage).toContain("Lagos");
+        // Nothing may ship with an unfilled placeholder in it.
+        expect(lead?.pitchMessage).not.toContain("{{");
+        expect(lead?.pitchModel).toBe("openai/gpt-4o-mini");
+        expect(lead?.pitchShared).toBe(true);
+      }
+
+      const grill = await Lead.findOne({ businessName: "Delta Grill" });
+      expect(grill?.pitchMessage).toContain("Delta Grill");
+      expect(grill?.pitchMessage).toContain("Abuja");
+
+      // Rewritten leads are no longer part of the backlog.
+      expect(await Lead.countDocuments(templatePitchFilter())).toBe(0);
+    } finally {
+      globalThis.fetch = realFetch;
+      await Settings.updateOne(
+        { key: "global" },
+        {
+          $set: {
+            "integrations.ai.provider": before?.provider ?? "AUTO",
+            "integrations.ai.apiKey": before?.apiKey ?? "",
+            "integrations.ai.model": before?.model ?? "",
+          },
+        },
+      );
+    }
+  });
+
+  it("refuses to start a job when the selection matches nothing", async () => {
+    await templateLead({ category: "perfume stores" });
+    const res = await request(app)
+      .post("/api/pipeline/jobs/rewrite-pitches")
+      .send({ categories: ["hotels"] });
+    expect(res.status).toBe(409);
+    // Refusing early must not leave the lock taken for the next scan.
+    expect(await PipelineJob.countDocuments({ activeKey: "pipeline" })).toBe(0);
+  });
+
+  it("reports the backlog on the operations status", async () => {
+    await templateLead();
+    const res = await request(app).get("/api/pipeline/jobs/status");
+    expect(res.status).toBe(200);
+    expect(res.body.templatePitchPending).toBe(1);
+    // It has a message, so it is not "waiting for one".
+    expect(res.body.pitchPending).toBe(0);
+  });
+
+  it("serves the preview over HTTP", async () => {
+    await templateLead({ businessNameNormalized: "a" });
+    await templateLead({ businessNameNormalized: "b" });
+    const res = await request(app).get("/api/pipeline/template-pitches");
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(2);
+    expect(res.body.aiCalls).toBe(1);
   });
 });

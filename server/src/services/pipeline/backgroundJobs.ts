@@ -15,10 +15,13 @@ import {
   processPendingLeads,
   recoverableQueriesForRun,
   resumeDiscoveryRun,
+  rewriteTemplatePitches,
   runFullPipeline,
+  templatePitchFilter,
   MAX_PROCESSING_ATTEMPTS,
   type BatchProcessResult,
   type DiscoverResult,
+  type TemplatePitchScope,
 } from "./runPipeline.js";
 
 export interface StartPipelineJobOptions {
@@ -26,6 +29,8 @@ export interface StartPipelineJobOptions {
   resumedFromRunId?: string;
   /** Who asked for it. Cron runs are tracked exactly like operator ones. */
   trigger?: "CRON" | "MANUAL" | "API";
+  /** REWRITE_PITCHES only: which categories and cities to rewrite. */
+  pitchScope?: TemplatePitchScope;
 }
 
 function busyError(active?: PipelineJobDocument | null): Error {
@@ -124,7 +129,9 @@ const JOB_STALLED_AFTER_MS = 12 * 60_000;
  * the minutes go, so they are not weighted evenly.
  */
 function phaseWeights(type: PipelineJobType): { discovery: number; processing: number } {
-  if (type === "PROCESS") return { discovery: 0, processing: 1 };
+  // REWRITE_PITCHES has no discovery or processing at all; it drives the bar
+  // from its own lead count and never reaches percentOf.
+  if (type === "PROCESS" || type === "REWRITE_PITCHES") return { discovery: 0, processing: 1 };
   if (type === "DISCOVERY") return { discovery: 1, processing: 0 };
   return { discovery: 0.25, processing: 0.75 };
 }
@@ -170,12 +177,84 @@ async function executePipelineJob(job: PipelineJobDocument): Promise<void> {
   heartbeat.unref();
 
   try {
+    const startPhase =
+      job.type === "REWRITE_PITCHES" ? "PITCHING" : job.type === "PROCESS" ? "PROCESSING" : "DISCOVERY";
     await updateJob(jobId, {
       status: "RUNNING",
-      phase: job.type === "PROCESS" ? "PROCESSING" : "DISCOVERY",
+      phase: startPhase,
       startedAt: new Date(),
-      "progress.message": job.type === "PROCESS" ? "Checking discovered leads" : "Starting discovery",
+      "progress.message":
+        job.type === "REWRITE_PITCHES"
+          ? "Looking for messages the AI writer never wrote"
+          : job.type === "PROCESS"
+            ? "Checking discovered leads"
+            : "Starting discovery",
     });
+
+    /*
+     * Rewriting is its own shape of work and finishes here.
+     *
+     * It discovers nothing and scores nothing, so the counters the rest of this
+     * function fills in would all be zero and the report would read as a scan
+     * that found nothing. It reports what it actually did instead: how many
+     * messages changed hands, and how many of those were served from a group
+     * rather than bought again.
+     */
+    if (job.type === "REWRITE_PITCHES") {
+      const scope = {
+        categories: job.pitchScope?.categories ?? undefined,
+        cities: job.pitchScope?.cities ?? undefined,
+      };
+
+      const rewrite = await rewriteTemplatePitches({
+        scope,
+        onProgress: async (progress) => {
+          await updateJob(jobId, {
+            phase: "PITCHING",
+            "progress.percent": percentOf("processing", progress.done, progress.total),
+            "progress.current": progress.done,
+            "progress.total": progress.total,
+            "progress.rewritten": progress.rewritten,
+            "progress.message": `Writing messages: ${progress.rewritten.toLocaleString()} of ${progress.done.toLocaleString()} rewritten`,
+          });
+          await assertNotCancelled(jobId);
+        },
+      });
+
+      // Nothing rewritten while leads matched means every request came back on
+      // the template, which is a provider problem wearing a success message.
+      const status: PipelineJobStatus =
+        rewrite.failed > 0 || (rewrite.matched > 0 && rewrite.rewritten === 0) ? "PARTIAL" : "COMPLETED";
+
+      // Guarded on activeKey, so a stop that lands between the last progress
+      // report and here is not overwritten with "completed".
+      await PipelineJob.updateOne(
+        { _id: jobId, activeKey: "pipeline" },
+        {
+          $set: {
+            status,
+            phase: "COMPLETE",
+            finishedAt: new Date(),
+            heartbeatAt: new Date(),
+            "progress.percent": 100,
+            "progress.current": rewrite.rewritten + rewrite.stillTemplate + rewrite.failed,
+            "progress.total": rewrite.matched,
+            "progress.rewritten": rewrite.rewritten,
+            "progress.reusedMessages": rewrite.reusedMessages,
+            // A rewrite that came back on the template is the same event the
+            // rest of the pipeline calls an AI fallback, so it is counted there.
+            "progress.aiFallbacks": rewrite.stillTemplate,
+            "progress.processingErrors": rewrite.failed,
+            "progress.message":
+              rewrite.rewritten === 0 && rewrite.matched > 0
+                ? "The AI writer produced nothing usable. Every message was left as it was; check the provider in Settings."
+                : `${rewrite.rewritten.toLocaleString()} message${rewrite.rewritten === 1 ? "" : "s"} rewritten using ${rewrite.aiCalls.toLocaleString()} AI call${rewrite.aiCalls === 1 ? "" : "s"}`,
+          },
+          $unset: { activeKey: 1 },
+        },
+      );
+      return;
+    }
 
     // Checked wherever progress is reported, which is the only place the loop
     // comes up for air often enough to notice.
@@ -410,6 +489,24 @@ export async function startPipelineJob(options: StartPipelineJobOptions): Promis
     }
   }
 
+  /*
+   * A rewrite with nothing behind it must not take the pipeline lock.
+   *
+   * The lock is exclusive, so a job that starts and immediately finds zero
+   * leads still blocks a scan for as long as it takes to notice. Saying so up
+   * front also gives the operator the real answer, which is that the categories
+   * they picked have nothing on the built-in template.
+   */
+  if (options.type === "REWRITE_PITCHES") {
+    const matched = await Lead.countDocuments(templatePitchFilter(options.pitchScope ?? {}));
+    if (matched === 0) {
+      throw Object.assign(
+        new Error("No messages match that selection. Nothing there is still on the built-in template."),
+        { statusCode: 409 },
+      );
+    }
+  }
+
   let job: PipelineJobDocument;
   try {
     job = await PipelineJob.create({
@@ -419,6 +516,7 @@ export async function startPipelineJob(options: StartPipelineJobOptions): Promis
       phase: "QUEUED",
       activeKey: "pipeline",
       resumedFromRunId: options.resumedFromRunId,
+      pitchScope: options.pitchScope,
       heartbeatAt: new Date(),
       progress: { message: "Queued" },
     });
@@ -445,6 +543,14 @@ export async function getPipelineOperationalStatus(): Promise<{
   latestJob: PipelineJobDocument | null;
   discoveredPending: number;
   pitchPending: number;
+  /**
+   * Leads holding a built-in template message rather than an AI-written one.
+   *
+   * Almost always the residue of scans run before an AI provider was connected.
+   * They look finished, sit in the queue ready to send, and nothing else counts
+   * them, so without this they are invisible.
+   */
+  templatePitchPending: number;
   /** Leads that have failed often enough that nothing retries them any more. */
   stalledLeads: number;
   resumableRun: { runId: string; status: string; recoverableQueries: number; startedAt: Date } | null;
@@ -455,43 +561,47 @@ export async function getPipelineOperationalStatus(): Promise<{
   const RESUMABLE_WINDOW_DAYS = 7;
   const resumableSince = new Date(Date.now() - RESUMABLE_WINDOW_DAYS * 86_400_000);
 
-  const [rawActiveJob, latestJob, discoveredPending, pitchPending, stalledLeads, candidates] = await Promise.all([
-    PipelineJob.findOne({ activeKey: "pipeline" }).sort({ createdAt: -1 }),
-    PipelineJob.findOne().sort({ createdAt: -1 }),
-    // Leads that have already failed processing repeatedly are not work this
-    // button can finish. Counting them left "Process N discovered" on screen
-    // permanently, doing nothing each time it was pressed.
-    Lead.countDocuments(processablePendingFilter()),
-    // Leads that qualified but never got a message. They are not in the
-    // approval queue and nothing else looks for them, so without this count
-    // they are simply lost.
-    Lead.countDocuments(pendingPitchFilter()),
-    /*
-     * The ones nothing will pick up again.
-     *
-     * Both counters above deliberately exclude leads that have already failed
-     * three times, because pressing a button that cannot finish them is worse
-     * than not offering it. The consequence was that those leads then appeared
-     * in no figure anywhere: work that had quietly stopped and said nothing.
-     * Counted separately so the overview can say so, with the reason attached
-     * to each lead in `lastProcessingError`.
-     */
-    Lead.countDocuments({
-      optedOut: { $ne: true },
-      processingAttempts: { $gte: MAX_PROCESSING_ATTEMPTS },
-      pipelineStage: { $in: ["DISCOVERED", "QUALIFIED"] },
-    }),
-    SearchRun.find({
-      resumedBy: { $exists: false },
-      startedAt: { $gte: resumableSince },
-      $or: [
-        { status: { $in: ["PARTIAL", "FAILED"] } },
-        { "queries.error": { $exists: true, $nin: [null, ""] } },
-      ],
-    })
-      .sort({ startedAt: -1 })
-      .limit(10),
-  ]);
+  const [rawActiveJob, latestJob, discoveredPending, pitchPending, templatePitchPending, stalledLeads, candidates] =
+    await Promise.all([
+      PipelineJob.findOne({ activeKey: "pipeline" }).sort({ createdAt: -1 }),
+      PipelineJob.findOne().sort({ createdAt: -1 }),
+      // Leads that have already failed processing repeatedly are not work this
+      // button can finish. Counting them left "Process N discovered" on screen
+      // permanently, doing nothing each time it was pressed.
+      Lead.countDocuments(processablePendingFilter()),
+      // Leads that qualified but never got a message. They are not in the
+      // approval queue and nothing else looks for them, so without this count
+      // they are simply lost.
+      Lead.countDocuments(pendingPitchFilter()),
+      // Leads whose message came from the built-in template. They have a message,
+      // so neither count above sees them, and they read worse than the rest.
+      Lead.countDocuments(templatePitchFilter()),
+      /*
+       * The ones nothing will pick up again.
+       *
+       * Both counters above deliberately exclude leads that have already failed
+       * three times, because pressing a button that cannot finish them is worse
+       * than not offering it. The consequence was that those leads then appeared
+       * in no figure anywhere: work that had quietly stopped and said nothing.
+       * Counted separately so the overview can say so, with the reason attached
+       * to each lead in `lastProcessingError`.
+       */
+      Lead.countDocuments({
+        optedOut: { $ne: true },
+        processingAttempts: { $gte: MAX_PROCESSING_ATTEMPTS },
+        pipelineStage: { $in: ["DISCOVERED", "QUALIFIED"] },
+      }),
+      SearchRun.find({
+        resumedBy: { $exists: false },
+        startedAt: { $gte: resumableSince },
+        $or: [
+          { status: { $in: ["PARTIAL", "FAILED"] } },
+          { "queries.error": { $exists: true, $nin: [null, ""] } },
+        ],
+      })
+        .sort({ startedAt: -1 })
+        .limit(10),
+    ]);
 
   // A job that has stopped beating is not active, it is finished badly. Saying
   // so here is what unsticks the dashboard without a restart.
@@ -521,7 +631,15 @@ export async function getPipelineOperationalStatus(): Promise<{
     }
   }
 
-  return { activeJob, latestJob: currentLatest, discoveredPending, pitchPending, stalledLeads, resumableRun };
+  return {
+    activeJob,
+    latestJob: currentLatest,
+    discoveredPending,
+    pitchPending,
+    templatePitchPending,
+    stalledLeads,
+    resumableRun,
+  };
 }
 
 /**

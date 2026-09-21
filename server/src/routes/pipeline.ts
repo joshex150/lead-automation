@@ -4,7 +4,12 @@ import { SearchRun } from "../models/SearchRun.js";
 import { PipelineJob } from "../models/PipelineJob.js";
 import { PipelineLease } from "../models/PipelineLease.js";
 import { asyncHandler, validateBody } from "../middleware/index.js";
-import { discover, processPendingLeads, runFullPipeline } from "../services/pipeline/runPipeline.js";
+import {
+  discover,
+  processPendingLeads,
+  runFullPipeline,
+  templatePitchSummary,
+} from "../services/pipeline/runPipeline.js";
 import {
   getPipelineJob,
   getPipelineOperationalStatus,
@@ -76,6 +81,60 @@ pipelineRouter.post(
   "/jobs/process",
   asyncHandler(async (_req, res) => {
     const job = await startPipelineJob({ type: "PROCESS" });
+    res.status(202).json({ job });
+  }),
+);
+
+/**
+ * GET /api/pipeline/template-pitches, what is still on the built-in template.
+ *
+ * Read before the rewrite, because the question an operator is really asking
+ * is not how many leads are affected but how much rewriting them will cost.
+ * Those differ by an order of magnitude here: messages are shared between
+ * leads in the same situation, so a category with hundreds of leads in it is
+ * usually a handful of AI calls.
+ */
+pipelineRouter.get(
+  "/template-pitches",
+  asyncHandler(async (req, res) => {
+    const q = z
+      .object({
+        categories: z.string().optional(),
+        cities: z.string().optional(),
+      })
+      .parse(req.query);
+
+    const summary = await templatePitchSummary({
+      categories: q.categories ? q.categories.split(",") : undefined,
+      cities: q.cities ? q.cities.split(",") : undefined,
+    });
+    res.json(summary);
+  }),
+);
+
+const rewritePitchesSchema = z
+  .object({
+    categories: z.array(z.string()).max(200).optional(),
+    cities: z.array(z.string()).max(200).optional(),
+  })
+  .default({});
+
+/**
+ * POST /api/pipeline/jobs/rewrite-pitches, replace built-in messages with AI.
+ *
+ * A background job rather than an inline call: this can run to a thousand
+ * leads, and the whole point of it is that an operator connected a provider
+ * after the fact and wants the backlog fixed without watching it.
+ */
+pipelineRouter.post(
+  "/jobs/rewrite-pitches",
+  validateBody(rewritePitchesSchema),
+  asyncHandler(async (req, res) => {
+    const body = req.body as z.infer<typeof rewritePitchesSchema>;
+    const job = await startPipelineJob({
+      type: "REWRITE_PITCHES",
+      pitchScope: { categories: body.categories, cities: body.cities },
+    });
     res.status(202).json({ job });
   }),
 );

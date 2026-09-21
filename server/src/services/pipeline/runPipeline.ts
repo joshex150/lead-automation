@@ -1007,6 +1007,264 @@ export async function draftPendingPitches(
   return result;
 }
 
+/**
+ * Where the rewrite is allowed to look.
+ *
+ * Empty means everywhere. The dashboard fills it from the preview below, so
+ * the categories it sends back are the exact strings that are on the leads.
+ */
+export interface TemplatePitchScope {
+  categories?: string[];
+  cities?: string[];
+}
+
+function exactInsensitive(values: string[]): RegExp[] {
+  return values
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .map((value) => new RegExp(`^${value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i"));
+}
+
+/**
+ * Leads holding a message the AI writer never wrote.
+ *
+ * This is the other half of `pendingPitchFilter`. That one finds leads with no
+ * message at all; these have one, written by the built-in template, which is
+ * why nothing has ever looked at them again. A scan run before the AI provider
+ * was connected produces hundreds of them, and they are not distinguishable in
+ * the queue from messages the model wrote: they simply read worse.
+ *
+ * `pitchModel` is the marker, not `pitchFallbackReason`. A pitch written while
+ * no provider was configured never records a reason, because nothing failed,
+ * so filtering on the reason would miss exactly the leads this exists for.
+ *
+ * What it deliberately excludes is anything already acted on. A message that
+ * has gone out is a record of what was said, not a draft, and a lead with a
+ * Gmail draft already created holds that text in Gmail where this cannot
+ * reach it. Approved messages are left alone too: somebody read that wording
+ * and said yes to it, and replacing it underneath them would make the approval
+ * a statement about text nobody has seen.
+ */
+export function templatePitchFilter(scope: TemplatePitchScope = {}): Record<string, unknown> {
+  const filter: Record<string, unknown> = {
+    pipelineStage: { $in: ["QUALIFIED", "PENDING_APPROVAL"] },
+    optedOut: { $ne: true },
+    outreachStatus: "NOT_CONTACTED",
+    "approval.status": { $in: ["NONE", "PENDING"] },
+    pitchMessage: { $exists: true, $nin: [null, ""] },
+    $or: [
+      { pitchModel: { $regex: "^template/" } },
+      // Written before the pipeline recorded which writer produced a message.
+      { pitchModel: { $exists: false } },
+      { pitchModel: null },
+      // AI was configured and failed. Worth another attempt for the same reason.
+      { pitchFallbackReason: { $exists: true, $nin: [null, ""] } },
+    ],
+  };
+
+  const categories = exactInsensitive(scope.categories ?? []);
+  if (categories.length) filter.category = { $in: categories };
+  const cities = exactInsensitive(scope.cities ?? []);
+  if (cities.length) filter.city = { $in: cities };
+
+  return filter;
+}
+
+/** One row per category, with what rewriting it would cost. */
+export interface TemplatePitchGroupSummary {
+  category: string;
+  leads: number;
+  /** Distinct situations, so one AI call each when messages are reused. */
+  situations: number;
+  /**
+   * Leads that carry their own Instagram bio or recent post.
+   *
+   * These are never grouped, because that detail is the whole value of the
+   * message, so each one costs a call of its own.
+   */
+  individual: number;
+  /** situations + individual. What the rewrite would actually spend. */
+  aiCalls: number;
+  cities: string[];
+}
+
+/**
+ * What is sitting there on the built-in template, and what fixing it costs.
+ *
+ * The operator picks categories from this, so it has to answer the question
+ * they are actually asking, which is not "how many leads" but "how many AI
+ * calls". Those are wildly different numbers here: four hundred leads across
+ * eleven situations is eleven calls, and nothing else on the dashboard says so.
+ *
+ * The call count is an estimate. Channels are reassigned from current contact
+ * data just before a message is written, so a lead can move between situations
+ * between this preview and the run. It moves by a lead or two, not by an order
+ * of magnitude.
+ */
+export async function templatePitchSummary(
+  scope: TemplatePitchScope = {},
+): Promise<{ total: number; aiCalls: number; categories: TemplatePitchGroupSummary[] }> {
+  const rows: Array<{
+    _id: { category: string; websiteType: string; channel: string; openingSoon: boolean; own: boolean };
+    count: number;
+    label: string;
+    cities: string[];
+  }> = await Lead.aggregate([
+    { $match: templatePitchFilter(scope) },
+    {
+      $group: {
+        _id: {
+          // Trimmed and lower-cased exactly as pitchGroupKey does it, so the
+          // count of situations here is the count the run will actually buy.
+          category: { $toLower: { $trim: { input: { $ifNull: ["$category", ""] } } } },
+          websiteType: { $ifNull: ["$websiteType", "UNKNOWN"] },
+          channel: {
+            $cond: [{ $in: [{ $ifNull: ["$outreachChannel", "NONE"] }, ["NONE", ""]] }, "EMAIL", "$outreachChannel"],
+          },
+          openingSoon: { $ifNull: ["$openingSoon", false] },
+          own: {
+            $or: [
+              { $gt: [{ $strLenCP: { $trim: { input: { $ifNull: ["$recentPostSummary", ""] } } } }, 0] },
+              { $gt: [{ $strLenCP: { $trim: { input: { $ifNull: ["$instagramBio", ""] } } } }, 0] },
+            ],
+          },
+        },
+        count: { $sum: 1 },
+        label: { $first: "$category" },
+        cities: { $addToSet: "$city" },
+      },
+    },
+  ]);
+
+  const byCategory = new Map<string, TemplatePitchGroupSummary>();
+  for (const row of rows) {
+    const key = row._id.category;
+    const entry =
+      byCategory.get(key) ??
+      { category: row.label || key, leads: 0, situations: 0, individual: 0, aiCalls: 0, cities: [] };
+    entry.leads += row.count;
+    if (row._id.own) entry.individual += row.count;
+    else entry.situations += 1;
+    for (const city of row.cities) if (city && !entry.cities.includes(city)) entry.cities.push(city);
+    byCategory.set(key, entry);
+  }
+
+  const categories = [...byCategory.values()]
+    .map((entry) => ({ ...entry, aiCalls: entry.situations + entry.individual, cities: entry.cities.sort() }))
+    .sort((a, b) => b.leads - a.leads);
+
+  return {
+    total: categories.reduce((sum, entry) => sum + entry.leads, 0),
+    aiCalls: categories.reduce((sum, entry) => sum + entry.aiCalls, 0),
+    categories,
+  };
+}
+
+export interface RewriteTemplatePitchesResult {
+  matched: number;
+  rewritten: number;
+  /** The writer produced a template again, so the lead was left as it was. */
+  stillTemplate: number;
+  failed: number;
+  reusedMessages: number;
+  aiCalls: number;
+}
+
+/**
+ * Puts an AI-written message on leads that only ever got the built-in one.
+ *
+ * Shares a single `PitchGroupCache` across the whole run, which is the entire
+ * point: a category with three hundred leads in one situation costs one call,
+ * not three hundred. Ordering by priority means a run cut short spends what it
+ * spent on the leads most worth sending to.
+ *
+ * A lead whose rewrite comes back on the template again is left untouched. It
+ * already holds that exact message, so saving it would move `pitchGeneratedAt`
+ * and clear the trail while changing nothing a recipient would ever see, and
+ * the run would report hundreds rewritten after the provider had refused every
+ * request.
+ */
+export interface RewriteTemplatePitchesOptions {
+  scope?: TemplatePitchScope;
+  limit?: number;
+  pitches?: PitchGroupCache;
+  onProgress?: (progress: { done: number; total: number; rewritten: number }) => void | Promise<void>;
+}
+
+export async function rewriteTemplatePitches(
+  options: RewriteTemplatePitchesOptions = {},
+): Promise<RewriteTemplatePitchesResult> {
+  // The same lease the rest of the pipeline writes leads under. A scan
+  // processing the same leads at the same time would re-pitch them underneath
+  // this, and the last writer would win silently.
+  return withPipelineLease("processing", () => rewriteTemplatePitchesUnlocked(options));
+}
+
+async function rewriteTemplatePitchesUnlocked(
+  options: RewriteTemplatePitchesOptions,
+): Promise<RewriteTemplatePitchesResult> {
+  const limit = options.limit ?? 1000;
+  const settings = await getSettings();
+  const pitches =
+    options.pitches ??
+    new PitchGroupCache(settings.pitch?.reuseAcrossSimilarLeads !== false, { forceProviderAttempt: true });
+
+  const filter = templatePitchFilter(options.scope);
+  const matched = await Lead.countDocuments(filter);
+  const result: RewriteTemplatePitchesResult = {
+    matched,
+    rewritten: 0,
+    stillTemplate: 0,
+    failed: 0,
+    reusedMessages: 0,
+    aiCalls: 0,
+  };
+  if (matched === 0) return result;
+
+  const before = { reused: pitches.stats.reused, generated: pitches.stats.generated };
+  const leads = await Lead.find(filter).sort({ priorityScore: -1, needScore: -1 }).limit(limit);
+
+  for (const lead of leads) {
+    try {
+      assignChannel(lead);
+      const pitch = await pitches.pitchFor(pitchContextFromLead(lead));
+
+      if (pitch.provider === "template") {
+        result.stillTemplate++;
+      } else {
+        applyPitch(lead, pitch);
+        if (lead.pipelineStage === "QUALIFIED") lead.pipelineStage = "PENDING_APPROVAL";
+        if (lead.approval.status === "NONE") lead.approval.status = "PENDING";
+        await lead.save();
+        result.rewritten++;
+      }
+    } catch (err) {
+      result.failed++;
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error({ lead: lead.businessName, err: message }, "could not rewrite a template pitch");
+    }
+    /*
+     * Deliberately not swallowed, unlike the progress callbacks on the scan
+     * paths. This is how a stop request reaches the loop, and every turn of it
+     * can spend an AI call: a rewrite that kept going after the operator
+     * pressed stop would go on buying messages nobody asked for. The caller
+     * reports a cancellation as an outcome rather than a failure.
+     */
+    if (options.onProgress) {
+      await options.onProgress({
+        done: result.rewritten + result.stillTemplate + result.failed,
+        total: leads.length,
+        rewritten: result.rewritten,
+      });
+    }
+  }
+
+  result.reusedMessages = pitches.stats.reused - before.reused;
+  result.aiCalls = pitches.stats.generated - before.generated;
+  logger.info(result, "template pitches rewritten");
+  return result;
+}
+
 export interface FullPipelineResult extends DiscoverResult, BatchProcessResult {
   sources?: SourceRunStats[];
 }

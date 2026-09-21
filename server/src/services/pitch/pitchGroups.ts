@@ -110,12 +110,27 @@ export interface GroupedPitch extends PitchResult {
  * would keep serving text written against last month's copy long after the
  * house style, the solution wording or the model changed.
  */
+export interface PitchGroupCacheOptions {
+  /**
+   * Probe the provider even while the bulk-work circuit is open.
+   *
+   * Set when an operator asked for these messages by hand. The circuit exists
+   * to stop a scan hammering a provider that is already failing, and a run
+   * started long after that outage would otherwise open on a stale cooldown
+   * and quietly template every lead it was asked to rewrite.
+   */
+  forceProviderAttempt?: boolean;
+}
+
 export class PitchGroupCache {
   private readonly templates = new Map<string, { subject: string; message: string; observation: string; provider: string; model: string } | null>();
   private reused = 0;
   private generated = 0;
 
-  constructor(private readonly enabled: boolean) {}
+  constructor(
+    private readonly enabled: boolean,
+    private readonly options: PitchGroupCacheOptions = {},
+  ) {}
 
   get stats(): { reused: number; generated: number } {
     return { reused: this.reused, generated: this.generated };
@@ -124,7 +139,7 @@ export class PitchGroupCache {
   async pitchFor(ctx: PitchContext): Promise<GroupedPitch> {
     if (!this.enabled || hasOwnSpecifics(ctx)) {
       this.generated++;
-      return generatePitch(ctx);
+      return generatePitch(ctx, this.options);
     }
 
     const ai = await getAiRuntime();
@@ -132,7 +147,7 @@ export class PitchGroupCache {
       // The template pitch is already one message per situation, so there is
       // nothing to save here and nothing to share.
       this.generated++;
-      return generatePitch(ctx);
+      return generatePitch(ctx, this.options);
     }
 
     const key = pitchGroupKey(ctx);
@@ -142,7 +157,7 @@ export class PitchGroupCache {
       if (!cached) {
         // This group already failed once. Do not pay for it again per lead.
         this.generated++;
-        return generatePitch(ctx);
+        return generatePitch(ctx, this.options);
       }
       this.reused++;
       return {

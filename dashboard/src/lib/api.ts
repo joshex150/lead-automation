@@ -10,6 +10,7 @@ import type {
   Settings,
   Stats,
   SuppressionEntry,
+  TemplatePitchSummary,
   TestResult,
 } from "./types";
 
@@ -212,6 +213,15 @@ export const api = {
     req<{ job: PipelineJob }>(`/api/pipeline/jobs/process`, {
       method: "POST",
       body: "{}",
+    }),
+
+  /** What is still carrying a built-in template message, and what fixing it costs. */
+  templatePitches: () => req<TemplatePitchSummary>(`/api/pipeline/template-pitches`),
+
+  startRewritePitchesJob: (categories?: string[], cities?: string[]) =>
+    req<{ job: PipelineJob }>(`/api/pipeline/jobs/rewrite-pitches`, {
+      method: "POST",
+      body: JSON.stringify({ categories, cities }),
     }),
 
   resumeDiscoveryJob: (runId: string) =>

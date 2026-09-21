@@ -1,0 +1,135 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>compose</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=DM+Sans:wght@400;500&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #08080a; }
+  .slide {
+    width: 1600px; height: 900px; position: relative; overflow: hidden;
+    background: #08080a; color: #f4f4f5;
+    font-family: 'DM Sans', system-ui, sans-serif;
+    display: flex; flex-direction: column;
+  }
+  .glow { position: absolute; inset: -30% -10% 40%; z-index: 0;
+    background: radial-gradient(55% 55% at 50% 0%, rgba(23,163,74,.20), transparent 70%),
+                radial-gradient(40% 40% at 88% 15%, rgba(59,130,246,.10), transparent 70%); }
+  .grid { position: absolute; inset: 0; z-index: 0; opacity: .45;
+    background-image: linear-gradient(#232329 1px, transparent 1px), linear-gradient(90deg, #232329 1px, transparent 1px);
+    background-size: 64px 64px;
+    -webkit-mask-image: radial-gradient(75% 65% at 50% 20%, #000 20%, transparent 80%); }
+  .inner { position: relative; z-index: 1; padding: 52px 64px 0; display: flex; flex-direction: column; height: 100%; }
+  .slide[data-kind="title"] .body { margin-block: auto; display: flex; gap: 70px; align-items: center; width: 100%; }
+  .slide[data-kind="title"] .left { flex: 1 1 auto; min-width: 0; }
+  .figs { flex: 0 0 auto; display: flex; flex-direction: column; gap: 30px; border-left: 1px solid #232329; padding-left: 44px; }
+  .fig .n { font-family: 'Space Grotesk'; font-weight: 700; font-size: 62px; letter-spacing: -.03em; line-height: 1; }
+  .fig .n span { color: #17a34a; }
+  .fig .l { margin-top: 8px; font-size: 16px; color: #a1a1aa; max-width: 22ch; line-height: 1.4; }
+  .brand { display: flex; align-items: center; gap: 12px; font-family: 'Space Grotesk'; font-weight: 700; font-size: 22px; letter-spacing: -.02em; }
+  .brand .accent { color: #17a34a; }
+  .kicker { margin-top: 30px; font-size: 13px; font-weight: 700; letter-spacing: .17em; text-transform: uppercase; color: #17a34a; }
+  h1 { font-family: 'Space Grotesk'; font-weight: 700; letter-spacing: -.032em; line-height: 1.04; margin-top: 14px; }
+  .big  { font-size: 70px; max-width: 15ch; }
+  .mid  { font-size: 44px; max-width: 26ch; }
+  h1 em { font-style: normal; color: #17a34a; }
+  .sub { margin-top: 18px; font-size: 21px; line-height: 1.5; color: #a1a1aa; max-width: 68ch; }
+  .foot { margin-top: auto; padding-bottom: 38px; font-size: 16px; color: #52525b; display: flex; gap: 34px; }
+
+  /* A screenshot region, cropped by offsetting the image inside a window. */
+  .shot { border: 1px solid #232329; background: #101014; box-shadow: 0 50px 110px -50px rgba(0,0,0,.95); overflow: hidden; }
+  .bar { display: flex; align-items: center; gap: 8px; padding: 13px 16px; border-bottom: 1px solid #232329; }
+  .dot { width: 11px; height: 11px; border-radius: 50%; background: #2f2f37; }
+  .url { margin-left: 12px; font-family: ui-monospace, monospace; font-size: 12.5px; color: #71717a; }
+  .win { position: relative; overflow: hidden; }
+  .win img { position: absolute; image-rendering: -webkit-optimize-contrast; }
+</style>
+<div id="root"></div>
+<script>
+const SRC = "../../dashboard/public/screens/";
+// crop: [x, y, w, h] in the source image's own pixels (screens are 3200x2000).
+const SLIDES = [
+  { id: "01-title", kind: "title",
+    kicker: "New from YEAN Technologies",
+    h: 'Find the businesses with <em>no website</em>, and write to them first',
+    sub: "YEAN Leads scans a city, opens what each business actually has online, and scores how badly they need a site. It drafts the message too.",
+    figs: [["<span>735</span>", "businesses found in one scan of Lagos and Abuja"],
+           ["<span>356</span>", "of them new, the rest already on file"],
+           ["<span>5.5</span> min", "to run all 18 searches"]],
+    foot: ["Google Places for discovery", "your own AI key for the writing", "Gmail or Resend for sending"] },
+
+  { id: "02-queue", kind: "shot",
+    kicker: "The approval gate",
+    h: "Nothing is sent without you",
+    img: "02-queue.png", crop: [600, 540, 2560, 1180], url: "yean-leads.app/queue",
+    foot: ["Read it", "Edit it", "Approve, regenerate or reject"] },
+
+  { id: "03-score", kind: "shot",
+    kicker: "Why a lead qualified",
+    h: "It shows you why",
+    img: "05-lead-detail.png", crop: [610, 530, 1650, 1000], url: "yean-leads.app/leads/lumen-lodge",
+    foot: ["Website audit", "Score breakdown", "Every contact, with its source"] },
+
+  { id: "04-message", kind: "shot",
+    kicker: "Written from what the check found",
+    h: "An email reads like an email",
+    img: "02-queue.png", crop: [1460, 860, 1700, 880], url: "yean-leads.app/queue",
+    foot: ["A WhatsApp message is shorter", "and it doesn't sign off like a letter"] },
+
+  { id: "05-leads", kind: "shot",
+    kicker: "Lead intelligence",
+    h: "Filtered the way you actually work",
+    img: "03-leads.png", crop: [600, 620, 2560, 1180], url: "yean-leads.app/leads",
+    foot: ["By city, category, website type", "score, recency, review growth"] },
+
+  { id: "06-stack", kind: "title",
+    kicker: "Under it",
+    h: 'Node, TypeScript, MongoDB, <em>Next.js</em>',
+    sub: "Every contact is stored with the page it came from and the date it was collected, which is what the NDPA asks you to keep.",
+    figs: [["1", "follow-up, ever, and only if there was no reply"],
+           ["<span>0</span>", "messages sent without a person approving them"]],
+    foot: ["A daily cap you choose", "A suppression list where an address is never stored again"] },
+];
+
+const MARK = `<svg viewBox="0 0 32 32" width="30" height="30" aria-hidden="true">
+  <rect x="0.5" y="0.5" width="31" height="31" fill="none" stroke="#f4f4f5" stroke-width="1"/>
+  <path d="M8.99 5.7 L13.01 5.7 L16.2 10.52 L19.39 5.7 L23.41 5.7 L17.87 13.96 L17.87 20.22 L14.52 20.22 L14.52 13.96 Z" fill="#f4f4f5"/>
+  <rect x="14.52" y="25.64" width="3.35" height="6.36" fill="#f4f4f5"/>
+  <rect x="10.78" y="21.28" width="10.78" height="2.96" fill="#17a34a"/>
+</svg>`;
+
+const root = document.getElementById("root");
+for (const s of SLIDES) {
+  const el = document.createElement("div");
+  el.className = "slide";
+  el.id = s.id;
+  el.dataset.kind = s.kind;
+  let body = "";
+  if (s.kind === "shot") {
+    const [x, y, w, h] = s.crop;
+    const MAX_W = 1472;   // 1600 less the two 64px gutters
+    const MAX_H = 512;    // what is left under the heading and above the footer
+    const scale = Math.min(MAX_W / w, MAX_H / h);
+    const winW = Math.round(w * scale), winH = Math.round(h * scale);
+    body = `<div class="shot" style="margin-top:26px;width:${winW}px">
+      <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="url">${s.url}</span></div>
+      <div class="win" style="width:${winW}px;height:${winH}px">
+        <img src="${SRC}${s.img}" style="width:${Math.round(3200*scale)}px;left:${-Math.round(x*scale)}px;top:${-Math.round(y*scale)}px">
+      </div></div>`;
+  } else {
+    body = s.sub ? `<p class="sub">${s.sub}</p>` : "";
+  }
+  const heading = `<p class="kicker">${s.kicker}</p><h1 class="${s.kind === "title" ? "big" : "mid"}">${s.h}</h1>`;
+  const inner = s.kind === "title"
+    ? `<div class="body"><div class="left">${heading}${body}</div>
+         ${s.figs ? `<div class="figs">${s.figs.map(f => `<div class="fig"><p class="n">${f[0]}</p><p class="l">${f[1]}</p></div>`).join("")}</div>` : ""}
+       </div>
+       <div class="foot">${s.foot.map(f => `<span>${f}</span>`).join("")}</div>`
+    : `${heading}${body}<div class="foot">${s.foot.map(f => `<span>${f}</span>`).join("")}</div>`;
+  el.innerHTML = `<div class="glow"></div><div class="grid"></div><div class="inner">
+      <div class="brand">${MARK}<span>YEAN <span class="accent">Leads</span></span></div>
+      ${inner}
+    </div>`;
+  root.appendChild(el);
+}
+window.__slides = SLIDES.map(s => s.id);
+</script>

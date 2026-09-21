@@ -1,8 +1,8 @@
 import mongoose, { Schema, type Document, type Model } from "mongoose";
 
-export type PipelineJobType = "FULL" | "DISCOVERY" | "PROCESS" | "RESUME_DISCOVERY";
+export type PipelineJobType = "FULL" | "DISCOVERY" | "PROCESS" | "RESUME_DISCOVERY" | "REWRITE_PITCHES";
 export type PipelineJobStatus = "QUEUED" | "RUNNING" | "COMPLETED" | "PARTIAL" | "FAILED" | "CANCELLED";
-export type PipelineJobPhase = "QUEUED" | "DISCOVERY" | "PROCESSING" | "COMPLETE";
+export type PipelineJobPhase = "QUEUED" | "DISCOVERY" | "PROCESSING" | "PITCHING" | "COMPLETE";
 
 export interface PipelineJobDocument extends Document {
   type: PipelineJobType;
@@ -27,6 +27,13 @@ export interface PipelineJobDocument extends Document {
   progressAt: Date;
   /** Set by the operator to stop a run that is going nowhere. */
   cancelRequested?: boolean;
+  /**
+   * Which leads a REWRITE_PITCHES job was pointed at.
+   *
+   * Kept on the job because the run is the only record of what was rewritten:
+   * the leads themselves come out looking like any other AI-written lead.
+   */
+  pitchScope?: { categories?: string[]; cities?: string[] };
   progress: {
     /**
      * One monotonic 0-100 for the whole job, phases included.
@@ -50,6 +57,10 @@ export interface PipelineJobDocument extends Document {
     qualified: number;
     processingErrors: number;
     aiFallbacks: number;
+    /** REWRITE_PITCHES: leads that went from the built-in template to AI. */
+    rewritten: number;
+    /** Messages served from a group rather than bought again. Credits saved. */
+    reusedMessages: number;
   };
   error?: string;
   /**
@@ -66,7 +77,7 @@ const pipelineJobSchema = new Schema<PipelineJobDocument>(
   {
     type: {
       type: String,
-      enum: ["FULL", "DISCOVERY", "PROCESS", "RESUME_DISCOVERY"],
+      enum: ["FULL", "DISCOVERY", "PROCESS", "RESUME_DISCOVERY", "REWRITE_PITCHES"],
       required: true,
     },
     trigger: { type: String, enum: ["CRON", "MANUAL", "API"], default: "API" },
@@ -78,7 +89,7 @@ const pipelineJobSchema = new Schema<PipelineJobDocument>(
     },
     phase: {
       type: String,
-      enum: ["QUEUED", "DISCOVERY", "PROCESSING", "COMPLETE"],
+      enum: ["QUEUED", "DISCOVERY", "PROCESSING", "PITCHING", "COMPLETE"],
       default: "QUEUED",
     },
     activeKey: { type: String, enum: ["pipeline"] },
@@ -89,6 +100,10 @@ const pipelineJobSchema = new Schema<PipelineJobDocument>(
     heartbeatAt: { type: Date, default: Date.now },
     progressAt: { type: Date, default: Date.now },
     cancelRequested: { type: Boolean, default: false },
+    pitchScope: {
+      categories: { type: [String], default: undefined },
+      cities: { type: [String], default: undefined },
+    },
     progress: {
       percent: { type: Number, default: 0 },
       current: { type: Number, default: 0 },
@@ -103,6 +118,8 @@ const pipelineJobSchema = new Schema<PipelineJobDocument>(
       qualified: { type: Number, default: 0 },
       processingErrors: { type: Number, default: 0 },
       aiFallbacks: { type: Number, default: 0 },
+      rewritten: { type: Number, default: 0 },
+      reusedMessages: { type: Number, default: 0 },
     },
     error: String,
     acknowledgedAt: Date,

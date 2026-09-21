@@ -19,13 +19,20 @@ import {
   RiTimeLine,
   RiBarChartBoxLine,
   RiRestartLine,
+  RiSparkling2Line,
 } from "react-icons/ri";
 import { api } from "@/lib/api";
 import { useLiveData } from "@/lib/live";
 import { useTheme } from "@/lib/theme/provider";
 import { Counter, Reveal, Stagger, StaggerItem } from "@/lib/theme/motion";
 import { SECTION_ITEMS } from "@/lib/theme/tokens";
-import type { OutreachLogEntry, PipelineJob, PipelineOperationalStatus, Stats } from "@/lib/types";
+import type {
+  OutreachLogEntry,
+  PipelineJob,
+  PipelineOperationalStatus,
+  Stats,
+  TemplatePitchSummary,
+} from "@/lib/types";
 
 /**
  * Column spans as literal class names, because Tailwind reads the source rather
@@ -103,8 +110,12 @@ export default function OverviewPage() {
       setOperations(next);
       if (completedJob) {
         if (completedJob.status === "COMPLETED") {
+          // A rewrite processes and qualifies nothing, so the scan wording would
+          // report it as a run that found nothing at all.
           toast.success(
-            `Pipeline finished: ${completedJob.progress.processed.toLocaleString()} processed, ${completedJob.progress.qualified.toLocaleString()} qualified.`,
+            completedJob.type === "REWRITE_PITCHES"
+              ? `${(completedJob.progress.rewritten ?? 0).toLocaleString()} message${completedJob.progress.rewritten === 1 ? "" : "s"} rewritten, ${(completedJob.progress.reusedMessages ?? 0).toLocaleString()} of them reused from a shared draft.`
+              : `Pipeline finished: ${completedJob.progress.processed.toLocaleString()} processed, ${completedJob.progress.qualified.toLocaleString()} qualified.`,
           );
         } else {
           toast.error(completedJob.error ?? completedJob.progress.message);
@@ -143,6 +154,7 @@ export default function OverviewPage() {
       latestJob: job,
       discoveredPending: current?.discoveredPending ?? 0,
       pitchPending: current?.pitchPending ?? 0,
+      templatePitchPending: current?.templatePitchPending ?? 0,
       stalledLeads: current?.stalledLeads ?? 0,
       resumableRun: current?.resumableRun ?? null,
     }));
@@ -664,6 +676,18 @@ export default function OverviewPage() {
           <ScanReport job={operations.latestJob} onDismiss={dismissReport} dismissing={dismissing} />
         )}
 
+      {/*
+        Offered only when there is nothing running, because the rewrite takes
+        the same exclusive lock a scan does and would be refused anyway.
+      */}
+      {!operations?.activeJob && (operations?.templatePitchPending ?? 0) > 0 && (
+        <TemplatePitchPanel
+          pending={operations!.templatePitchPending!}
+          busy={pipelineBusy}
+          onStarted={adoptStartedJob}
+        />
+      )}
+
       <div className="mt-8 grid items-start gap-6 xl:grid-cols-12">
         {visibleSections.map((id) => (
           <Reveal key={id} className={`min-w-0 ${SPAN_CLASS[SECTION_SPAN[id] ?? 12] ?? "xl:col-span-12"}`}>
@@ -672,6 +696,249 @@ export default function OverviewPage() {
         ))}
       </div>
     </div>
+  );
+}
+
+/**
+ * The messages nobody will ever look at again unless this says so.
+ *
+ * A scan run before an AI provider was connected still produces a message for
+ * every lead, from the built-in template, and those leads go into the approval
+ * queue looking exactly as finished as the rest. Nothing counts them, nothing
+ * retries them, and the only way to improve one was to open it and press
+ * regenerate, which is one AI call for one lead.
+ *
+ * So the unit of choice here is the category, and the number that leads is the
+ * cost rather than the volume. They are not close: messages are shared between
+ * leads in the same situation, so four hundred leads is usually a dozen calls.
+ * An operator deciding what to spend credits on needs that number in front of
+ * them, not a count of leads that implies four hundred.
+ */
+function TemplatePitchPanel({
+  pending,
+  busy,
+  onStarted,
+}: {
+  pending: number;
+  busy: boolean;
+  onStarted: (job: PipelineJob) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [summary, setSummary] = useState<TemplatePitchSummary | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [chosen, setChosen] = useState<string[]>([]);
+  const [starting, setStarting] = useState(false);
+
+  /*
+   * Fetched once, and only once the panel is opened.
+   *
+   * Opening it is what asks for the aggregation, which runs over every queued
+   * lead and is not worth doing on the visits to this page that are about
+   * something else. `failed` is what stops a refusal turning into a loop:
+   * without it a failed request leaves `summary` null, the effect re-runs on
+   * the next render and asks again, with a toast each time.
+   */
+  useEffect(() => {
+    if (!open || summary || loading || failed) return;
+    setLoading(true);
+    api
+      .templatePitches()
+      .then((result) => {
+        setSummary(result);
+        // Everything selected to begin with, because "fix all of it" is the
+        // common case and the picker is there for the times it is not.
+        setChosen(result.categories.map((entry) => entry.category));
+      })
+      .catch((err) => {
+        setFailed(true);
+        toast.error(err instanceof Error ? err.message : "Could not read the messages");
+      })
+      .finally(() => setLoading(false));
+  }, [open, summary, loading, failed]);
+
+  const selected = useMemo(() => {
+    const rows = (summary?.categories ?? []).filter((entry) => chosen.includes(entry.category));
+    return {
+      leads: rows.reduce((sum, entry) => sum + entry.leads, 0),
+      aiCalls: rows.reduce((sum, entry) => sum + entry.aiCalls, 0),
+      all: rows.length === (summary?.categories.length ?? 0),
+    };
+  }, [summary, chosen]);
+
+  function toggle(category: string): void {
+    setChosen((current) =>
+      current.includes(category) ? current.filter((value) => value !== category) : [...current, category],
+    );
+  }
+
+  async function rewrite(): Promise<void> {
+    if (selected.leads === 0) return;
+    setStarting(true);
+    try {
+      // An empty list means every category, which is not the same as "none".
+      // Sending the full selection explicitly would also work, but this keeps
+      // the job's record of what it was asked to do honest about the intent.
+      const { job } = await api.startRewritePitchesJob(selected.all ? undefined : chosen);
+      onStarted(job);
+      toast.success(
+        `Rewriting ${selected.leads.toLocaleString()} message${selected.leads === 1 ? "" : "s"} in the background.`,
+      );
+      setOpen(false);
+      setSummary(null);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "The rewrite could not start");
+    } finally {
+      setStarting(false);
+    }
+  }
+
+  return (
+    <section className="panel accent-purple mt-6 border-t-4" role="status">
+      <div className="flex min-w-0 flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex min-w-0 items-start gap-3">
+          <span className="mt-0.5 shrink-0 text-purple-600 dark:text-purple-400">
+            <RiSparkling2Line className="h-5 w-5" />
+          </span>
+          <div className="min-w-0">
+            <h2 className="section-title !mb-0">
+              {pending.toLocaleString()} message{pending === 1 ? "" : "s"} still use the built-in template
+            </h2>
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              These were written before the AI writer was available, so they read the same for every business in a
+              category. Rewriting them costs one AI call per situation, not one per lead.
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            // Reopening is the retry: a refusal was probably the API restarting.
+            setFailed(false);
+            setOpen((value) => !value);
+          }}
+          className="btn-ghost shrink-0"
+        >
+          {open ? <RiCloseLine className="h-4 w-4" /> : <RiSparkling2Line className="h-4 w-4" />}
+          {open ? "Close" : "Choose categories"}
+        </button>
+      </div>
+
+      {open && (
+        <div className="mt-5 border-t border-slate-200 pt-5 dark:border-slate-700">
+          {loading && <p className="text-sm text-slate-500 dark:text-slate-400">Reading the queue…</p>}
+
+          {!loading && failed && (
+            <p className="text-sm text-slate-500 dark:text-slate-400">
+              Could not read the queue. Close this and open it again to retry.
+            </p>
+          )}
+
+          {!loading && summary && summary.categories.length === 0 && (
+            <p className="text-sm text-slate-500 dark:text-slate-400">
+              Nothing is on the built-in template any more.
+            </p>
+          )}
+
+          {!loading && summary && summary.categories.length > 0 && (
+            <>
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                  Category · messages · AI calls
+                </p>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setChosen(chosen.length === summary.categories.length ? [] : summary.categories.map((e) => e.category))
+                  }
+                  className="text-xs font-semibold text-purple-600 hover:underline dark:text-purple-400"
+                >
+                  {chosen.length === summary.categories.length ? "Clear all" : "Select all"}
+                </button>
+              </div>
+
+              <ul className="max-h-80 space-y-1 overflow-y-auto pr-1">
+                {summary.categories.map((entry) => {
+                  const picked = chosen.includes(entry.category);
+                  return (
+                    <li key={entry.category}>
+                      <label
+                        className={`flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2 text-sm transition ${
+                          picked
+                            ? "border-purple-300 bg-purple-50 dark:border-purple-700 dark:bg-purple-950/40"
+                            : "border-transparent hover:bg-slate-50 dark:hover:bg-slate-800/60"
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={picked}
+                          onChange={() => toggle(entry.category)}
+                          className="h-4 w-4 shrink-0 rounded border-slate-300 text-purple-600 focus:ring-purple-500"
+                        />
+                        <span className="min-w-0 flex-1 truncate font-medium text-slate-700 dark:text-slate-200">
+                          {entry.category}
+                        </span>
+                        <span className="shrink-0 tabular-nums text-slate-500 dark:text-slate-400">
+                          {entry.leads.toLocaleString()}
+                        </span>
+                        <span
+                          className="shrink-0 tabular-nums text-xs font-semibold text-purple-600 dark:text-purple-400"
+                          title={
+                            entry.individual > 0
+                              ? `${entry.situations} shared message${entry.situations === 1 ? "" : "s"} plus ${entry.individual} written individually, because those leads carry their own Instagram detail`
+                              : `${entry.situations} shared message${entry.situations === 1 ? "" : "s"}`
+                          }
+                        >
+                          {entry.aiCalls.toLocaleString()} call{entry.aiCalls === 1 ? "" : "s"}
+                        </span>
+                      </label>
+                    </li>
+                  );
+                })}
+              </ul>
+
+              <div className="mt-5 flex flex-col gap-3 border-t border-slate-200 pt-4 sm:flex-row sm:items-center sm:justify-between dark:border-slate-700">
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  {selected.leads === 0 ? (
+                    "Nothing selected."
+                  ) : (
+                    <>
+                      <span className="font-semibold text-slate-700 dark:text-slate-200">
+                        {selected.leads.toLocaleString()} message{selected.leads === 1 ? "" : "s"}
+                      </span>{" "}
+                      for about{" "}
+                      <span className="font-semibold text-purple-600 dark:text-purple-400">
+                        {selected.aiCalls.toLocaleString()} AI call{selected.aiCalls === 1 ? "" : "s"}
+                      </span>
+                      .
+                    </>
+                  )}
+                </p>
+                <button
+                  type="button"
+                  onClick={rewrite}
+                  disabled={busy || starting || selected.leads === 0}
+                  className="btn-primary shrink-0"
+                >
+                  {starting ? (
+                    <span className="loader-spinner h-4 w-4 border-2 border-white/40 border-t-white" />
+                  ) : (
+                    <RiSparkling2Line className="h-4 w-4" />
+                  )}
+                  Rewrite with AI
+                </button>
+              </div>
+
+              <p className="mt-3 text-xs leading-relaxed text-slate-400">
+                Only messages that have not been sent or approved are touched, so nothing already on its way to a
+                business changes. The call estimate moves by a lead or two if contact details changed since the last
+                scan.
+              </p>
+            </>
+          )}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -846,7 +1113,9 @@ function PipelineProgress({
       ? "Discovering businesses"
       : job.phase === "PROCESSING"
         ? "Auditing and scoring leads"
-        : "Preparing pipeline";
+        : job.phase === "PITCHING"
+          ? "Rewriting messages with AI"
+          : "Preparing pipeline";
 
   /*
    * Say when the counters last moved.
