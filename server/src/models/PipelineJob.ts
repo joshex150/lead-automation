@@ -1,4 +1,5 @@
 import mongoose, { Schema, type Document, type Model } from "mongoose";
+import { OUTREACH_CHANNELS, type OutreachChannel } from "../types.js";
 
 export type PipelineJobType = "FULL" | "DISCOVERY" | "PROCESS" | "RESUME_DISCOVERY" | "REWRITE_PITCHES";
 export type PipelineJobStatus = "QUEUED" | "RUNNING" | "COMPLETED" | "PARTIAL" | "FAILED" | "CANCELLED";
@@ -28,12 +29,12 @@ export interface PipelineJobDocument extends Document {
   /** Set by the operator to stop a run that is going nowhere. */
   cancelRequested?: boolean;
   /**
-   * Which leads a REWRITE_PITCHES job was pointed at.
+   * Which channels a REWRITE_PITCHES job was pointed at.
    *
    * Kept on the job because the run is the only record of what was rewritten:
    * the leads themselves come out looking like any other AI-written lead.
    */
-  pitchScope?: { categories?: string[]; cities?: string[] };
+  pitchScope?: { channels?: OutreachChannel[] };
   progress: {
     /**
      * One monotonic 0-100 for the whole job, phases included.
@@ -101,8 +102,7 @@ const pipelineJobSchema = new Schema<PipelineJobDocument>(
     progressAt: { type: Date, default: Date.now },
     cancelRequested: { type: Boolean, default: false },
     pitchScope: {
-      categories: { type: [String], default: undefined },
-      cities: { type: [String], default: undefined },
+      channels: { type: [String], enum: OUTREACH_CHANNELS, default: undefined },
     },
     progress: {
       percent: { type: Number, default: 0 },

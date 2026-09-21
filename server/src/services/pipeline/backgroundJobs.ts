@@ -201,10 +201,7 @@ async function executePipelineJob(job: PipelineJobDocument): Promise<void> {
      * rather than bought again.
      */
     if (job.type === "REWRITE_PITCHES") {
-      const scope = {
-        categories: job.pitchScope?.categories ?? undefined,
-        cities: job.pitchScope?.cities ?? undefined,
-      };
+      const scope: TemplatePitchScope = { channels: job.pitchScope?.channels ?? undefined };
 
       const rewrite = await rewriteTemplatePitches({
         scope,

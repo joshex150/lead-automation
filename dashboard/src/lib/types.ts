@@ -409,21 +409,30 @@ export interface TestResult {
   error?: string;
 }
 
-/** One category's worth of messages still on the built-in template. */
-export interface TemplatePitchCategory {
-  category: string;
+/** One kind of problem, and how many businesses share it. */
+export interface TemplatePitchIssue {
+  websiteType: WebsiteType;
+  leads: number;
+  situations: number;
+}
+
+/** One channel's worth of messages still on the built-in template. */
+export interface TemplatePitchChannel {
+  channel: Lead["outreachChannel"];
   leads: number;
   /** Distinct situations, so one AI call each when messages are reused. */
   situations: number;
   /** Leads with their own Instagram detail. Never grouped, so one call each. */
   individual: number;
-  /** situations + individual: what rewriting this category would spend. */
+  /** situations + individual: what rewriting this channel would spend. */
   aiCalls: number;
-  cities: string[];
+  /** False for leads with no contact route: nothing can be sent to them. */
+  reachable: boolean;
+  issues: TemplatePitchIssue[];
 }
 
 export interface TemplatePitchSummary {
   total: number;
   aiCalls: number;
-  categories: TemplatePitchCategory[];
+  channels: TemplatePitchChannel[];
 }

@@ -19,6 +19,7 @@ import { importLeads, runExtraSources } from "../services/discovery/sources/runS
 import { runFollowUps } from "../services/outreach/followUp.js";
 import { checkWebsite } from "../services/websiteChecker/index.js";
 import { logger } from "../utils/logger.js";
+import { OUTREACH_CHANNELS, type OutreachChannel } from "../types.js";
 
 export const pipelineRouter = Router();
 
@@ -97,16 +98,9 @@ pipelineRouter.post(
 pipelineRouter.get(
   "/template-pitches",
   asyncHandler(async (req, res) => {
-    const q = z
-      .object({
-        categories: z.string().optional(),
-        cities: z.string().optional(),
-      })
-      .parse(req.query);
-
+    const q = z.object({ channels: z.string().optional() }).parse(req.query);
     const summary = await templatePitchSummary({
-      categories: q.categories ? q.categories.split(",") : undefined,
-      cities: q.cities ? q.cities.split(",") : undefined,
+      channels: q.channels ? (q.channels.split(",") as OutreachChannel[]) : undefined,
     });
     res.json(summary);
   }),
@@ -114,8 +108,7 @@ pipelineRouter.get(
 
 const rewritePitchesSchema = z
   .object({
-    categories: z.array(z.string()).max(200).optional(),
-    cities: z.array(z.string()).max(200).optional(),
+    channels: z.array(z.enum(OUTREACH_CHANNELS)).min(1).optional(),
   })
   .default({});
 
@@ -133,7 +126,7 @@ pipelineRouter.post(
     const body = req.body as z.infer<typeof rewritePitchesSchema>;
     const job = await startPipelineJob({
       type: "REWRITE_PITCHES",
-      pitchScope: { categories: body.categories, cities: body.cities },
+      pitchScope: { channels: body.channels },
     });
     res.status(202).json({ job });
   }),

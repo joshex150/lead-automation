@@ -24,7 +24,7 @@ import { mapWithConcurrency } from "../../utils/async.js";
 import { getCheckerRuntime, getPlacesKey } from "../../config/runtime.js";
 import { runExtraSources, type SourceRunStats } from "../discovery/sources/runSources.js";
 import { logger } from "../../utils/logger.js";
-import type { DiscoveredBusiness, IncomingLead } from "../../types.js";
+import type { DiscoveredBusiness, IncomingLead, OutreachChannel } from "../../types.js";
 import { withPipelineLease } from "./coordinator.js";
 
 /**
@@ -1010,19 +1010,13 @@ export async function draftPendingPitches(
 /**
  * Where the rewrite is allowed to look.
  *
- * Empty means everywhere. The dashboard fills it from the preview below, so
- * the categories it sends back are the exact strings that are on the leads.
+ * Channels, because that is the axis an operator actually works along: an
+ * email and a WhatsApp message are different objects with different lengths
+ * and different sign-offs, and they are worth different amounts. Empty means
+ * every channel.
  */
 export interface TemplatePitchScope {
-  categories?: string[];
-  cities?: string[];
-}
-
-function exactInsensitive(values: string[]): RegExp[] {
-  return values
-    .map((value) => value.trim())
-    .filter(Boolean)
-    .map((value) => new RegExp(`^${value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i"));
+  channels?: OutreachChannel[];
 }
 
 /**
@@ -1062,17 +1056,35 @@ export function templatePitchFilter(scope: TemplatePitchScope = {}): Record<stri
     ],
   };
 
-  const categories = exactInsensitive(scope.categories ?? []);
-  if (categories.length) filter.category = { $in: categories };
-  const cities = exactInsensitive(scope.cities ?? []);
-  if (cities.length) filter.city = { $in: cities };
+  const channels = (scope.channels ?? []).filter(Boolean);
+  if (channels.length) {
+    filter.outreachChannel = channels.includes("NONE")
+      ? // A lead with no route stores NONE, but older ones stored nothing at
+        // all. Both mean the same thing and both belong in that row.
+        { $in: [...channels, null] }
+      : { $in: channels };
+  }
 
   return filter;
 }
 
-/** One row per category, with what rewriting it would cost. */
-export interface TemplatePitchGroupSummary {
-  category: string;
+/**
+ * One kind of problem, and how many businesses share it.
+ *
+ * This is what makes the call count believable rather than a number to be
+ * taken on trust: businesses with the same problem get the same message, so
+ * the problems are the things being bought.
+ */
+export interface TemplatePitchIssue {
+  websiteType: string;
+  leads: number;
+  /** Distinct messages needed, since the same problem in two trades reads differently. */
+  situations: number;
+}
+
+/** One row per channel, with what rewriting it would cost. */
+export interface TemplatePitchChannelSummary {
+  channel: OutreachChannel;
   leads: number;
   /** Distinct situations, so one AI call each when messages are reused. */
   situations: number;
@@ -1085,42 +1097,43 @@ export interface TemplatePitchGroupSummary {
   individual: number;
   /** situations + individual. What the rewrite would actually spend. */
   aiCalls: number;
-  cities: string[];
+  /** False for NONE: nothing can be sent to those leads whatever is written. */
+  reachable: boolean;
+  issues: TemplatePitchIssue[];
 }
 
 /**
  * What is sitting there on the built-in template, and what fixing it costs.
  *
- * The operator picks categories from this, so it has to answer the question
- * they are actually asking, which is not "how many leads" but "how many AI
- * calls". Those are wildly different numbers here: four hundred leads across
+ * The operator picks channels from this, so it has to answer the question they
+ * are actually asking, which is not "how many leads" but "how many AI calls".
+ * Those are wildly different numbers here: four hundred businesses across
  * eleven situations is eleven calls, and nothing else on the dashboard says so.
  *
- * The call count is an estimate. Channels are reassigned from current contact
- * data just before a message is written, so a lead can move between situations
- * between this preview and the run. It moves by a lead or two, not by an order
- * of magnitude.
+ * A situation is one trade with one problem on one channel, which is exactly
+ * what the writer is asked for: the same message goes to every business in it,
+ * with the name and city filled in per lead.
+ *
+ * The call count is an estimate, and one that errs high. Channels are
+ * reassigned from current contact data just before a message is written, so a
+ * lead can move between situations between this preview and the run.
  */
 export async function templatePitchSummary(
   scope: TemplatePitchScope = {},
-): Promise<{ total: number; aiCalls: number; categories: TemplatePitchGroupSummary[] }> {
+): Promise<{ total: number; aiCalls: number; channels: TemplatePitchChannelSummary[] }> {
   const rows: Array<{
-    _id: { category: string; websiteType: string; channel: string; openingSoon: boolean; own: boolean };
+    _id: { channel: OutreachChannel; category: string; websiteType: string; openingSoon: boolean; own: boolean };
     count: number;
-    label: string;
-    cities: string[];
   }> = await Lead.aggregate([
     { $match: templatePitchFilter(scope) },
     {
       $group: {
         _id: {
+          channel: { $ifNull: ["$outreachChannel", "NONE"] },
           // Trimmed and lower-cased exactly as pitchGroupKey does it, so the
           // count of situations here is the count the run will actually buy.
           category: { $toLower: { $trim: { input: { $ifNull: ["$category", ""] } } } },
           websiteType: { $ifNull: ["$websiteType", "UNKNOWN"] },
-          channel: {
-            $cond: [{ $in: [{ $ifNull: ["$outreachChannel", "NONE"] }, ["NONE", ""]] }, "EMAIL", "$outreachChannel"],
-          },
           openingSoon: { $ifNull: ["$openingSoon", false] },
           own: {
             $or: [
@@ -1130,33 +1143,56 @@ export async function templatePitchSummary(
           },
         },
         count: { $sum: 1 },
-        label: { $first: "$category" },
-        cities: { $addToSet: "$city" },
       },
     },
   ]);
 
-  const byCategory = new Map<string, TemplatePitchGroupSummary>();
+  const byChannel = new Map<OutreachChannel, TemplatePitchChannelSummary & { issueMap: Map<string, TemplatePitchIssue> }>();
+
   for (const row of rows) {
-    const key = row._id.category;
+    const channel = (row._id.channel || "NONE") as OutreachChannel;
     const entry =
-      byCategory.get(key) ??
-      { category: row.label || key, leads: 0, situations: 0, individual: 0, aiCalls: 0, cities: [] };
+      byChannel.get(channel) ??
+      {
+        channel,
+        leads: 0,
+        situations: 0,
+        individual: 0,
+        aiCalls: 0,
+        reachable: channel !== "NONE",
+        issues: [],
+        issueMap: new Map<string, TemplatePitchIssue>(),
+      };
+
     entry.leads += row.count;
     if (row._id.own) entry.individual += row.count;
     else entry.situations += 1;
-    for (const city of row.cities) if (city && !entry.cities.includes(city)) entry.cities.push(city);
-    byCategory.set(key, entry);
+
+    const issue = entry.issueMap.get(row._id.websiteType) ?? {
+      websiteType: row._id.websiteType,
+      leads: 0,
+      situations: 0,
+    };
+    issue.leads += row.count;
+    if (!row._id.own) issue.situations += 1;
+    entry.issueMap.set(row._id.websiteType, issue);
+
+    byChannel.set(channel, entry);
   }
 
-  const categories = [...byCategory.values()]
-    .map((entry) => ({ ...entry, aiCalls: entry.situations + entry.individual, cities: entry.cities.sort() }))
-    .sort((a, b) => b.leads - a.leads);
+  const channels = [...byChannel.values()]
+    .map(({ issueMap, ...entry }) => ({
+      ...entry,
+      aiCalls: entry.situations + entry.individual,
+      issues: [...issueMap.values()].sort((a, b) => b.leads - a.leads),
+    }))
+    // Reachable channels first: those are the ones worth spending on.
+    .sort((a, b) => Number(b.reachable) - Number(a.reachable) || b.leads - a.leads);
 
   return {
-    total: categories.reduce((sum, entry) => sum + entry.leads, 0),
-    aiCalls: categories.reduce((sum, entry) => sum + entry.aiCalls, 0),
-    categories,
+    total: channels.reduce((sum, entry) => sum + entry.leads, 0),
+    aiCalls: channels.reduce((sum, entry) => sum + entry.aiCalls, 0),
+    channels,
   };
 }
 

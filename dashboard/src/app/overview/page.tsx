@@ -26,13 +26,33 @@ import { useLiveData } from "@/lib/live";
 import { useTheme } from "@/lib/theme/provider";
 import { Counter, Reveal, Stagger, StaggerItem } from "@/lib/theme/motion";
 import { SECTION_ITEMS } from "@/lib/theme/tokens";
+import { CHANNEL_LABELS } from "@/lib/contacts";
 import type {
+  Lead,
   OutreachLogEntry,
   PipelineJob,
   PipelineOperationalStatus,
   Stats,
   TemplatePitchSummary,
+  WebsiteType,
 } from "@/lib/types";
+
+/**
+ * The problem, said the way an operator would say it.
+ *
+ * Shorter than the badge wording used elsewhere, because these sit several to
+ * a row underneath a channel and the row has to stay readable.
+ */
+const WEBSITE_PROBLEM_LABELS: Record<WebsiteType, string> = {
+  NO_WEBSITE: "No website",
+  BROKEN_WEBSITE: "Broken site",
+  POOR_WEBSITE: "Poor site",
+  SOCIAL_MEDIA_ONLY: "Social only",
+  LINK_IN_BIO_ONLY: "Link-in-bio",
+  MENU_PLATFORM_ONLY: "Menu platform",
+  SHOPIFY: "Shopify",
+  CUSTOM_WEBSITE: "Custom site",
+};
 
 /**
  * Column spans as literal class names, because Tailwind reads the source rather
@@ -198,7 +218,11 @@ export default function OverviewPage() {
     setStopping(true);
     try {
       await api.cancelJob(job._id);
-      toast.success("Scan stopped. Everything it had already found was kept.");
+      toast.success(
+        job.type === "REWRITE_PITCHES"
+          ? "Rewrite stopped. Every message already rewritten was kept, and no further credits are spent."
+          : "Scan stopped. Everything it had already found was kept.",
+      );
       await loadOperations();
       load();
     } catch (e) {
@@ -708,11 +732,16 @@ export default function OverviewPage() {
  * retries them, and the only way to improve one was to open it and press
  * regenerate, which is one AI call for one lead.
  *
- * So the unit of choice here is the category, and the number that leads is the
- * cost rather than the volume. They are not close: messages are shared between
- * leads in the same situation, so four hundred leads is usually a dozen calls.
- * An operator deciding what to spend credits on needs that number in front of
- * them, not a count of leads that implies four hundred.
+ * The unit of choice is the channel, because that is what an operator actually
+ * decides along: an email and a WhatsApp message are different objects, worth
+ * different amounts, and usually worked on different days.
+ *
+ * The number that leads is the cost, not the volume. They are not close.
+ * Businesses with the same problem get the same message, with their own name
+ * and town filled in, so four hundred businesses is usually a dozen calls. An
+ * operator deciding what to spend credits on needs that number in front of
+ * them, and the breakdown underneath is what makes it believable rather than a
+ * figure to be taken on trust.
  */
 function TemplatePitchPanel({
   pending,
@@ -727,7 +756,7 @@ function TemplatePitchPanel({
   const [summary, setSummary] = useState<TemplatePitchSummary | null>(null);
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
-  const [chosen, setChosen] = useState<string[]>([]);
+  const [chosen, setChosen] = useState<Lead["outreachChannel"][]>([]);
   const [starting, setStarting] = useState(false);
 
   /*
@@ -746,9 +775,13 @@ function TemplatePitchPanel({
       .templatePitches()
       .then((result) => {
         setSummary(result);
-        // Everything selected to begin with, because "fix all of it" is the
-        // common case and the picker is there for the times it is not.
-        setChosen(result.categories.map((entry) => entry.category));
+        /*
+         * Everything reachable starts selected, and the unreachable row does
+         * not. Rewriting a lead with no email, no Instagram and no WhatsApp
+         * number spends a credit on a message that cannot be sent to anybody,
+         * so that one is opt-in rather than opt-out.
+         */
+        setChosen(result.channels.filter((entry) => entry.reachable).map((entry) => entry.channel));
       })
       .catch((err) => {
         setFailed(true);
@@ -758,17 +791,18 @@ function TemplatePitchPanel({
   }, [open, summary, loading, failed]);
 
   const selected = useMemo(() => {
-    const rows = (summary?.categories ?? []).filter((entry) => chosen.includes(entry.category));
+    const rows = (summary?.channels ?? []).filter((entry) => chosen.includes(entry.channel));
     return {
       leads: rows.reduce((sum, entry) => sum + entry.leads, 0),
       aiCalls: rows.reduce((sum, entry) => sum + entry.aiCalls, 0),
-      all: rows.length === (summary?.categories.length ?? 0),
+      all: rows.length > 0 && rows.length === (summary?.channels.length ?? 0),
+      unreachable: rows.some((entry) => !entry.reachable),
     };
   }, [summary, chosen]);
 
-  function toggle(category: string): void {
+  function toggle(channel: Lead["outreachChannel"]): void {
     setChosen((current) =>
-      current.includes(category) ? current.filter((value) => value !== category) : [...current, category],
+      current.includes(channel) ? current.filter((value) => value !== channel) : [...current, channel],
     );
   }
 
@@ -776,9 +810,7 @@ function TemplatePitchPanel({
     if (selected.leads === 0) return;
     setStarting(true);
     try {
-      // An empty list means every category, which is not the same as "none".
-      // Sending the full selection explicitly would also work, but this keeps
-      // the job's record of what it was asked to do honest about the intent.
+      // An empty list means every channel, which is not the same as "none".
       const { job } = await api.startRewritePitchesJob(selected.all ? undefined : chosen);
       onStarted(job);
       toast.success(
@@ -805,8 +837,8 @@ function TemplatePitchPanel({
               {pending.toLocaleString()} message{pending === 1 ? "" : "s"} still use the built-in template
             </h2>
             <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              These were written before the AI writer was available, so they read the same for every business in a
-              category. Rewriting them costs one AI call per situation, not one per lead.
+              Written before the AI writer was available, so every business in the same situation got the same words.
+              Rewriting groups them by situation, so the cost is one AI call per situation rather than one per message.
             </p>
           </div>
         </div>
@@ -820,7 +852,7 @@ function TemplatePitchPanel({
           className="btn-ghost shrink-0"
         >
           {open ? <RiCloseLine className="h-4 w-4" /> : <RiSparkling2Line className="h-4 w-4" />}
-          {open ? "Close" : "Choose categories"}
+          {open ? "Close" : "Choose channels"}
         </button>
       </div>
 
@@ -834,63 +866,76 @@ function TemplatePitchPanel({
             </p>
           )}
 
-          {!loading && summary && summary.categories.length === 0 && (
+          {!loading && summary && summary.channels.length === 0 && (
             <p className="text-sm text-slate-500 dark:text-slate-400">
               Nothing is on the built-in template any more.
             </p>
           )}
 
-          {!loading && summary && summary.categories.length > 0 && (
+          {!loading && summary && summary.channels.length > 0 && (
             <>
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                  Category · messages · AI calls
-                </p>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setChosen(chosen.length === summary.categories.length ? [] : summary.categories.map((e) => e.category))
-                  }
-                  className="text-xs font-semibold text-purple-600 hover:underline dark:text-purple-400"
-                >
-                  {chosen.length === summary.categories.length ? "Clear all" : "Select all"}
-                </button>
-              </div>
-
-              <ul className="max-h-80 space-y-1 overflow-y-auto pr-1">
-                {summary.categories.map((entry) => {
-                  const picked = chosen.includes(entry.category);
+              <ul className="space-y-2">
+                {summary.channels.map((entry) => {
+                  const picked = chosen.includes(entry.channel);
                   return (
-                    <li key={entry.category}>
+                    <li key={entry.channel}>
                       <label
-                        className={`flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2 text-sm transition ${
+                        className={`flex cursor-pointer flex-col gap-2 rounded-lg border px-3 py-3 transition ${
                           picked
                             ? "border-purple-300 bg-purple-50 dark:border-purple-700 dark:bg-purple-950/40"
-                            : "border-transparent hover:bg-slate-50 dark:hover:bg-slate-800/60"
+                            : "border-slate-200 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800/60"
                         }`}
                       >
-                        <input
-                          type="checkbox"
-                          checked={picked}
-                          onChange={() => toggle(entry.category)}
-                          className="h-4 w-4 shrink-0 rounded border-slate-300 text-purple-600 focus:ring-purple-500"
-                        />
-                        <span className="min-w-0 flex-1 truncate font-medium text-slate-700 dark:text-slate-200">
-                          {entry.category}
-                        </span>
-                        <span className="shrink-0 tabular-nums text-slate-500 dark:text-slate-400">
-                          {entry.leads.toLocaleString()}
-                        </span>
-                        <span
-                          className="shrink-0 tabular-nums text-xs font-semibold text-purple-600 dark:text-purple-400"
-                          title={
-                            entry.individual > 0
-                              ? `${entry.situations} shared message${entry.situations === 1 ? "" : "s"} plus ${entry.individual} written individually, because those leads carry their own Instagram detail`
-                              : `${entry.situations} shared message${entry.situations === 1 ? "" : "s"}`
-                          }
-                        >
-                          {entry.aiCalls.toLocaleString()} call{entry.aiCalls === 1 ? "" : "s"}
-                        </span>
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="checkbox"
+                            checked={picked}
+                            onChange={() => toggle(entry.channel)}
+                            className="h-4 w-4 shrink-0 rounded border-slate-300 text-purple-600 focus:ring-purple-500"
+                          />
+                          <span className="min-w-0 flex-1 truncate text-sm font-semibold text-slate-700 dark:text-slate-200">
+                            {CHANNEL_LABELS[entry.channel]}
+                          </span>
+                          <span className="shrink-0 text-sm tabular-nums text-slate-500 dark:text-slate-400">
+                            {entry.leads.toLocaleString()} message{entry.leads === 1 ? "" : "s"}
+                          </span>
+                          <span className="shrink-0 text-sm font-bold tabular-nums text-purple-600 dark:text-purple-400">
+                            {entry.aiCalls.toLocaleString()} call{entry.aiCalls === 1 ? "" : "s"}
+                          </span>
+                        </div>
+
+                        {/*
+                          What the calls are actually for. "Twelve calls for
+                          four hundred messages" is the sort of claim nobody
+                          believes until they can see the groups behind it.
+                        */}
+                        <div className="flex flex-wrap items-center gap-1.5 pl-7">
+                          {entry.issues.map((issue) => (
+                            <span
+                              key={issue.websiteType}
+                              className="inline-flex items-center gap-1 rounded border border-slate-200 px-1.5 py-0.5 text-[11px] text-slate-500 dark:border-slate-700 dark:text-slate-400"
+                              title={`${issue.leads} ${issue.leads === 1 ? "business has" : "businesses have"} this problem, sharing ${issue.situations} message${issue.situations === 1 ? "" : "s"} between them`}
+                            >
+                              {WEBSITE_PROBLEM_LABELS[issue.websiteType] ?? issue.websiteType}
+                              <span className="font-semibold tabular-nums">{issue.leads.toLocaleString()}</span>
+                            </span>
+                          ))}
+                          {entry.individual > 0 && (
+                            <span
+                              className="text-[11px] text-slate-400"
+                              title="These carry their own Instagram bio or a recent post worth mentioning, which is the whole value of the message, so each is written on its own."
+                            >
+                              + {entry.individual.toLocaleString()} written individually
+                            </span>
+                          )}
+                        </div>
+
+                        {!entry.reachable && (
+                          <p className="pl-7 text-[11px] leading-relaxed text-amber-600 dark:text-amber-400">
+                            No email, Instagram or WhatsApp number on these, so nothing can be sent to them whatever is
+                            written. Left unselected for that reason.
+                          </p>
+                        )}
                       </label>
                     </li>
                   );
@@ -931,8 +976,8 @@ function TemplatePitchPanel({
 
               <p className="mt-3 text-xs leading-relaxed text-slate-400">
                 Only messages that have not been sent or approved are touched, so nothing already on its way to a
-                business changes. The call estimate moves by a lead or two if contact details changed since the last
-                scan.
+                business changes. Each one still opens with that business&rsquo;s own name and town. The call estimate
+                errs high: it can only fall if contact details changed since the last scan.
               </p>
             </>
           )}
@@ -968,6 +1013,19 @@ function ScanReport({
     ? { accent: "accent-rose", ink: "text-rose-600 dark:text-rose-400", fill: "bg-rose-600" }
     : { accent: "accent-cta", ink: "text-amber-600 dark:text-amber-400", fill: "bg-amber-500" };
 
+  /*
+   * A rewrite is not a scan, and this panel is written about scans.
+   *
+   * Everything below counts businesses found, leads processed and searches to
+   * resume. A rewrite does none of those, so reporting one here printed four
+   * zeros and advice about resuming searches that had never run. Its own
+   * figures are the ones that mean something: messages changed, messages the
+   * writer would not write, and what to do about it.
+   */
+  const isRewrite = job.type === "REWRITE_PITCHES";
+  const rewritten = job.progress.rewritten ?? 0;
+  const untouched = job.progress.aiFallbacks;
+
   const kept = job.progress.created > 0 || job.progress.qualified > 0;
   const alreadyKnown = Math.max(0, job.progress.found - job.progress.created);
 
@@ -981,19 +1039,31 @@ function ScanReport({
    * in the queue ready to send.
    */
   const reasons: string[] = [];
-  if (job.progress.failedQueries > 0) {
+  if (isRewrite) {
+    if (untouched > 0) {
+      reasons.push(
+        `${untouched.toLocaleString()} message${untouched === 1 ? "" : "s"} came back on the built-in template again, so ${untouched === 1 ? "it was" : "they were"} left exactly as ${untouched === 1 ? "it was" : "they were"}. That is the AI writer refusing, not a lead problem: check the provider in Settings and run it again.`,
+      );
+    }
+    if (job.progress.processingErrors > 0) {
+      reasons.push(
+        `${job.progress.processingErrors.toLocaleString()} ${job.progress.processingErrors === 1 ? "message" : "messages"} could not be saved. Those leads still hold their old message and nothing was lost.`,
+      );
+    }
+  }
+  if (!isRewrite && job.progress.failedQueries > 0) {
     reasons.push(
       `${job.progress.failedQueries.toLocaleString()} ${job.progress.failedQueries === 1 ? "search" : "searches"} did not complete. Resume picks up exactly those, and skips the ones that worked.`,
     );
   }
-  if (job.progress.processingErrors > 0) {
+  if (!isRewrite && job.progress.processingErrors > 0) {
     reasons.push(
       `${job.progress.processingErrors.toLocaleString()} ${job.progress.processingErrors === 1 ? "business" : "businesses"} could not be checked and scored. They stay in the queue and are retried on the next run.`,
     );
   }
-  if (job.progress.aiFallbacks > 0) {
+  if (!isRewrite && job.progress.aiFallbacks > 0) {
     reasons.push(
-      `${job.progress.aiFallbacks.toLocaleString()} ${job.progress.aiFallbacks === 1 ? "message was" : "messages were"} written from the built-in template because the AI writer was unavailable. Those leads are ready to send; regenerate any of them from the queue.`,
+      `${job.progress.aiFallbacks.toLocaleString()} ${job.progress.aiFallbacks === 1 ? "message was" : "messages were"} written from the built-in template because the AI writer was unavailable. Those leads are ready to send, and the rewrite panel above turns the whole backlog into AI-written messages for one call per situation.`,
     );
   }
 
@@ -1006,7 +1076,13 @@ function ScanReport({
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
             <h2 className="section-title !mb-0">
-              {failed ? "The last scan did not finish" : "The last scan finished with problems"}
+              {isRewrite
+                ? failed
+                  ? "The rewrite did not finish"
+                  : "The rewrite finished with problems"
+                : failed
+                  ? "The last scan did not finish"
+                  : "The last scan finished with problems"}
             </h2>
             <span className={`text-[10px] font-extrabold uppercase tracking-wider ${tone.ink}`}>
               {failed ? "Failed" : "Partial"}
@@ -1029,10 +1105,21 @@ function ScanReport({
       </div>
 
       <div className="mt-4 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
-        <ProgressValue label="Found" value={job.progress.found} />
-        <ProgressValue label="New" value={job.progress.created} />
-        <ProgressValue label="Processed" value={job.progress.processed} />
-        <ProgressValue label="Qualified" value={job.progress.qualified} />
+        {isRewrite ? (
+          <>
+            <ProgressValue label="Rewritten" value={rewritten} />
+            <ProgressValue label="Shared" value={job.progress.reusedMessages ?? 0} />
+            <ProgressValue label="Left as they were" value={untouched} />
+            <ProgressValue label="Errors" value={job.progress.processingErrors} />
+          </>
+        ) : (
+          <>
+            <ProgressValue label="Found" value={job.progress.found} />
+            <ProgressValue label="New" value={job.progress.created} />
+            <ProgressValue label="Processed" value={job.progress.processed} />
+            <ProgressValue label="Qualified" value={job.progress.qualified} />
+          </>
+        )}
       </div>
 
       {/*
@@ -1040,7 +1127,7 @@ function ScanReport({
         figures look wrong: 735 found against 356 new reads like a fault until
         it says the rest were businesses already on file.
       */}
-      {alreadyKnown > 0 && (
+      {!isRewrite && alreadyKnown > 0 && (
         <p className="mt-2 text-xs text-slate-400">
           {alreadyKnown.toLocaleString()} of the {job.progress.found.toLocaleString()} found{" "}
           {alreadyKnown === 1 ? "was" : "were"} already on file
@@ -1063,9 +1150,13 @@ function ScanReport({
       )}
 
       <p className="mt-4 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
-        {kept
-          ? "Everything found before the problem was kept. Use the actions above to retry the searches that failed, or to finish processing the leads already found."
-          : "No leads were lost, because none had been saved when it stopped. Run the scan again when you are ready."}
+        {isRewrite
+          ? rewritten > 0
+            ? `${rewritten.toLocaleString()} message${rewritten === 1 ? " is" : "s are"} now AI-written and waiting in the queue. Anything left on the template is still there to try again, and no credits were spent twice.`
+            : "Nothing was changed, so no message was lost and the leads are exactly as they were. Check the AI provider in Settings, then run it again."
+          : kept
+            ? "Everything found before the problem was kept. Use the actions above to retry the searches that failed, or to finish processing the leads already found."
+            : "No leads were lost, because none had been saved when it stopped. Run the scan again when you are ready."}
       </p>
     </section>
   );
@@ -1147,7 +1238,13 @@ function PipelineProgress({
         </div>
         <div className="flex shrink-0 items-center gap-3">
           <p className="font-heading text-2xl font-extrabold tabular-nums text-purple-600">{percent}%</p>
-          <button type="button" onClick={onStop} disabled={stopping} className="btn-ghost" aria-label="Stop this scan">
+          <button
+            type="button"
+            onClick={onStop}
+            disabled={stopping}
+            className="btn-ghost"
+            aria-label={job.type === "REWRITE_PITCHES" ? "Stop this rewrite" : "Stop this scan"}
+          >
             {stopping ? (
               <span className="loader-spinner h-4 w-4 border-2 border-slate-300 border-t-slate-600" />
             ) : (
@@ -1160,13 +1257,31 @@ function PipelineProgress({
       <div className="mt-4 h-3 overflow-hidden border border-purple-200 bg-purple-50 dark:border-purple-900 dark:bg-purple-950/30">
         <div className="h-full bg-purple-600 transition-[width] duration-500" style={{ width: `${percent}%` }} />
       </div>
+      {/*
+        A rewrite finds and qualifies nothing, so the scan counters would sit
+        at four zeros for the whole run and read as work going nowhere. What
+        moves during a rewrite is messages, and how many were shared rather
+        than bought is the number the operator is watching.
+      */}
       <div className="mt-4 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
-        <ProgressValue label="Found" value={job.progress.found} />
-        <ProgressValue label="Created" value={job.progress.created} />
-        <ProgressValue label="Processed" value={job.progress.processed} />
-        <ProgressValue label="Qualified" value={job.progress.qualified} />
+        {job.type === "REWRITE_PITCHES" ? (
+          <>
+            <ProgressValue label="Rewritten" value={job.progress.rewritten ?? 0} />
+            <ProgressValue label="Shared" value={job.progress.reusedMessages ?? 0} />
+            <ProgressValue label="Checked" value={job.progress.current} />
+            <ProgressValue label="To go" value={Math.max(0, job.progress.total - job.progress.current)} />
+          </>
+        ) : (
+          <>
+            <ProgressValue label="Found" value={job.progress.found} />
+            <ProgressValue label="Created" value={job.progress.created} />
+            <ProgressValue label="Processed" value={job.progress.processed} />
+            <ProgressValue label="Qualified" value={job.progress.qualified} />
+          </>
+        )}
       </div>
-      {(job.progress.failedQueries > 0 || job.progress.processingErrors > 0 || job.progress.aiFallbacks > 0) && (
+      {job.type !== "REWRITE_PITCHES" &&
+        (job.progress.failedQueries > 0 || job.progress.processingErrors > 0 || job.progress.aiFallbacks > 0) && (
         <p className="mt-3 text-xs font-semibold text-amber-700 dark:text-amber-400">
           {job.progress.failedQueries > 0
             ? `${job.progress.failedQueries} search${job.progress.failedQueries === 1 ? "" : "es"} will remain resumable.`

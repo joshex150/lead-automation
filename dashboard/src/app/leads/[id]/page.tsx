@@ -26,6 +26,7 @@ import {
   RiCheckboxCircleFill,
 } from "react-icons/ri";
 import { api } from "@/lib/api";
+import { isTemplatePitch } from "@/lib/pitch";
 import type { Lead, OutreachLogEntry } from "@/lib/types";
 import {
   IntelligenceScores,
@@ -384,15 +385,17 @@ export default function LeadDetailPage() {
                   <h2 className="section-title">Current pitch</h2>
                   <p className="section-description">The latest generated outreach copy stored for this business.</p>
                 </div>
-                {lead.pitchFallbackReason ? (
-                  <span className="status-badge text-amber-600">Template fallback</span>
+                {isTemplatePitch(lead) ? (
+                  <span className="status-badge text-amber-600">Built-in template</span>
                 ) : (
                   lead.pitchModel && <span className="status-badge text-purple-600">{lead.pitchModel}</span>
                 )}
               </div>
-              {lead.pitchFallbackReason && (
+              {isTemplatePitch(lead) && (
                 <p className="mb-4 break-words border border-amber-500/30 bg-amber-500/5 p-3 text-xs leading-relaxed text-amber-700 [overflow-wrap:anywhere] dark:text-amber-400">
-                  AI fallback reason: {lead.pitchFallbackReason}
+                  {lead.pitchFallbackReason
+                    ? `The AI writer was unavailable, so this is the built-in template. It said: ${lead.pitchFallbackReason}`
+                    : "Written before an AI provider was connected, so every business in this situation got the same words."}
                 </p>
               )}
               {lead.pitchSubject && (

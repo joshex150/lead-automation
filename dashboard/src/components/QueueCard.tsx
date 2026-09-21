@@ -22,6 +22,7 @@ import {
   RiGroupLine,
 } from "react-icons/ri";
 import { api } from "@/lib/api";
+import { isTemplatePitch, templatePitchExplanation } from "@/lib/pitch";
 import type { Lead } from "@/lib/types";
 import { CHANNEL_LABELS, MESSAGE_LABELS, contactRoutes, whatsappLink, whatsappNumber } from "@/lib/contacts";
 import { IntelligenceScores, MaturityBadge, SourceBadge, WebsiteTypeBadge } from "./badges";
@@ -143,6 +144,8 @@ export function QueueCard({
   }
 
   const isApproved = lead.approval.status === "APPROVED";
+  const isTemplate = isTemplatePitch(lead);
+  const templateReason = templatePitchExplanation(lead);
   const priority = lead.priorityScore ?? Math.round((lead.needScore ?? lead.leadScore) * 0.75 + (lead.reachScore ?? 0) * 0.25);
   const accent = priority >= 70 ? "border-l-emerald-500" : priority >= 50 ? "border-l-brand-500" : "border-l-slate-500";
   const issueCount = lead.websiteCheck?.issues?.length ?? 0;
@@ -305,8 +308,13 @@ export function QueueCard({
                     <RiGroupLine className="mr-1 h-3.5 w-3.5" /> Shared message
                   </span>
                 )}
-                {lead.pitchFallbackReason ? (
-                  <span className="status-badge text-amber-600">Template fallback</span>
+                {isTemplate ? (
+                  <span
+                    className="status-badge text-amber-600"
+                    title="Written by the built-in template, so every business in this situation got the same words. Regenerate writes this one with AI."
+                  >
+                    Built-in template
+                  </span>
                 ) : (
                   lead.pitchModel && <span className="status-badge text-purple-600">AI · {lead.pitchModel}</span>
                 )}
@@ -322,13 +330,22 @@ export function QueueCard({
               to come, and pressing Regenerate produced the same sentence again.
               The provider's own words are the only thing that says which it is.
             */}
-            {lead.pitchFallbackReason && (
+            {isTemplate && (
               <div className="mb-4 break-words border border-amber-500/30 bg-amber-500/5 p-3 text-xs leading-relaxed text-amber-700 [overflow-wrap:anywhere] dark:text-amber-400">
-                <p className="font-bold">This lead has the built-in template message, not an AI-written one.</p>
-                <p className="mt-1">
-                  The writer said: <span className="font-semibold">{lead.pitchFallbackReason}</span>
-                </p>
-                <p className="mt-1.5 opacity-90">{fallbackAdvice(lead.pitchFallbackReason)}</p>
+                <p className="font-bold">{templateReason.headline}</p>
+                {templateReason.detail ? (
+                  <>
+                    <p className="mt-1">
+                      The writer said: <span className="font-semibold">{templateReason.detail}</span>
+                    </p>
+                    <p className="mt-1.5 opacity-90">{fallbackAdvice(templateReason.detail)}</p>
+                  </>
+                ) : (
+                  <p className="mt-1 opacity-90">
+                    Regenerate writes this one with AI. To do the whole backlog at once, use the rewrite panel on the
+                    overview: it buys one message per situation rather than one per lead.
+                  </p>
+                )}
               </div>
             )}
 

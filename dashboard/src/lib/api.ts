@@ -218,10 +218,10 @@ export const api = {
   /** What is still carrying a built-in template message, and what fixing it costs. */
   templatePitches: () => req<TemplatePitchSummary>(`/api/pipeline/template-pitches`),
 
-  startRewritePitchesJob: (categories?: string[], cities?: string[]) =>
+  startRewritePitchesJob: (channels?: Lead["outreachChannel"][]) =>
     req<{ job: PipelineJob }>(`/api/pipeline/jobs/rewrite-pitches`, {
       method: "POST",
-      body: JSON.stringify({ categories, cities }),
+      body: JSON.stringify({ channels }),
     }),
 
   resumeDiscoveryJob: (runId: string) =>

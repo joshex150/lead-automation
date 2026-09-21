@@ -1626,13 +1626,38 @@ describe("rewriting built-in template messages", () => {
     expect(await Lead.countDocuments(templatePitchFilter())).toBe(0);
   });
 
-  it("scopes to the chosen categories, case-insensitively", async () => {
-    await templateLead({ category: "Perfume Stores", businessNameNormalized: "a" });
-    await templateLead({ category: "restaurants", businessNameNormalized: "b" });
+  it("scopes to the chosen channels", async () => {
+    await templateLead({ businessNameNormalized: "a", outreachChannel: "EMAIL" });
+    await templateLead({ businessNameNormalized: "b", outreachChannel: "WHATSAPP" });
+    await templateLead({ businessNameNormalized: "c", outreachChannel: "WHATSAPP" });
 
-    expect(await Lead.countDocuments(templatePitchFilter({ categories: ["perfume stores"] }))).toBe(1);
-    expect(await Lead.countDocuments(templatePitchFilter({ categories: ["restaurants"] }))).toBe(1);
-    expect(await Lead.countDocuments(templatePitchFilter({ categories: ["hotels"] }))).toBe(0);
+    expect(await Lead.countDocuments(templatePitchFilter({ channels: ["EMAIL"] }))).toBe(1);
+    expect(await Lead.countDocuments(templatePitchFilter({ channels: ["WHATSAPP"] }))).toBe(2);
+    expect(await Lead.countDocuments(templatePitchFilter({ channels: ["EMAIL", "WHATSAPP"] }))).toBe(3);
+    expect(await Lead.countDocuments(templatePitchFilter({ channels: ["INSTAGRAM_MANUAL"] }))).toBe(0);
+  });
+
+  /*
+   * A lead saved before the channel field existed has nothing in it, which
+   * means the same as NONE. Left out of the NONE row, it would be a lead the
+   * operator can see in the total and never select.
+   */
+  it("counts a lead with no channel recorded as having no route", async () => {
+    await templateLead({ businessNameNormalized: "a", outreachChannel: "NONE" });
+    await Lead.collection.insertOne({
+      businessName: "Legacy Shop",
+      businessNameNormalized: "legacy shop",
+      category: "perfume stores",
+      city: "Port Harcourt",
+      pipelineStage: "PENDING_APPROVAL",
+      approval: { status: "PENDING" },
+      outreachStatus: "NOT_CONTACTED",
+      websiteType: "NO_WEBSITE",
+      pitchMessage: "Hello Legacy Shop, ...",
+      pitchModel: "template/builtin",
+    });
+
+    expect(await Lead.countDocuments(templatePitchFilter({ channels: ["NONE"] }))).toBe(2);
   });
 
   /*
@@ -1651,22 +1676,49 @@ describe("rewriting built-in template messages", () => {
     });
 
     const summary = await templatePitchSummary();
-    const row = summary.categories.find((entry) => entry.category.toLowerCase() === "perfume stores");
+    const row = summary.channels.find((entry) => entry.channel === "EMAIL");
     expect(row?.leads).toBe(4);
     expect(row?.situations).toBe(1);
     expect(row?.individual).toBe(1);
     expect(row?.aiCalls).toBe(2);
     expect(summary.total).toBe(4);
+    expect(summary.aiCalls).toBe(2);
   });
 
-  it("splits one category into separate situations per website problem", async () => {
+  /*
+   * Businesses with the same problem share a message; a different problem is a
+   * different message. The issue breakdown is what says so on screen, so the
+   * call count is explained rather than asserted.
+   */
+  it("splits a channel into one situation per problem, and reports them", async () => {
     await templateLead({ businessNameNormalized: "a", websiteType: "NO_WEBSITE" });
-    await templateLead({ businessNameNormalized: "b", websiteType: "SOCIAL_MEDIA_ONLY" });
+    await templateLead({ businessNameNormalized: "b", websiteType: "NO_WEBSITE" });
+    await templateLead({ businessNameNormalized: "c", websiteType: "SOCIAL_MEDIA_ONLY" });
 
     const summary = await templatePitchSummary();
-    const row = summary.categories.find((entry) => entry.category.toLowerCase() === "perfume stores");
-    expect(row?.leads).toBe(2);
+    const row = summary.channels.find((entry) => entry.channel === "EMAIL");
+    expect(row?.leads).toBe(3);
     expect(row?.situations).toBe(2);
+    expect(row?.issues).toEqual([
+      { websiteType: "NO_WEBSITE", leads: 2, situations: 1 },
+      { websiteType: "SOCIAL_MEDIA_ONLY", leads: 1, situations: 1 },
+    ]);
+  });
+
+  /*
+   * A business with no way in is still in the queue, and rewriting its message
+   * spends a credit on something nobody can send. It gets its own row so the
+   * operator can decide, rather than being quietly folded into email.
+   */
+  it("keeps leads with no contact route in their own, unreachable row", async () => {
+    await templateLead({ businessNameNormalized: "a", outreachChannel: "EMAIL" });
+    await templateLead({ businessNameNormalized: "b", outreachChannel: "NONE" });
+
+    const summary = await templatePitchSummary();
+    expect(summary.channels.find((entry) => entry.channel === "EMAIL")?.reachable).toBe(true);
+    expect(summary.channels.find((entry) => entry.channel === "NONE")?.reachable).toBe(false);
+    // Reachable channels lead, because those are the ones worth spending on.
+    expect(summary.channels[0].reachable).toBe(true);
   });
 
   /*
@@ -1676,16 +1728,15 @@ describe("rewriting built-in template messages", () => {
    * behaves the same as the count above.
    */
   it("scopes the preview as well as the count", async () => {
-    await templateLead({ businessNameNormalized: "a", category: "Perfume Stores" });
-    await templateLead({ businessNameNormalized: "b", category: "restaurants" });
+    await templateLead({ businessNameNormalized: "a", outreachChannel: "EMAIL" });
+    await templateLead({ businessNameNormalized: "b", outreachChannel: "WHATSAPP" });
 
-    const scoped = await templatePitchSummary({ categories: ["PERFUME STORES"] });
+    const scoped = await templatePitchSummary({ channels: ["WHATSAPP"] });
     expect(scoped.total).toBe(1);
-    expect(scoped.categories).toHaveLength(1);
+    expect(scoped.channels).toHaveLength(1);
+    expect(scoped.channels[0].channel).toBe("WHATSAPP");
 
-    const byCity = await templatePitchSummary({ cities: ["port harcourt"] });
-    expect(byCity.total).toBe(2);
-    expect(await templatePitchSummary({ cities: ["Kano"] })).toMatchObject({ total: 0 });
+    expect(await templatePitchSummary({ channels: ["INSTAGRAM_MANUAL"] })).toMatchObject({ total: 0 });
   });
 
   /*
@@ -1800,10 +1851,10 @@ describe("rewriting built-in template messages", () => {
   });
 
   it("refuses to start a job when the selection matches nothing", async () => {
-    await templateLead({ category: "perfume stores" });
+    await templateLead({ outreachChannel: "EMAIL" });
     const res = await request(app)
       .post("/api/pipeline/jobs/rewrite-pitches")
-      .send({ categories: ["hotels"] });
+      .send({ channels: ["INSTAGRAM_MANUAL"] });
     expect(res.status).toBe(409);
     // Refusing early must not leave the lock taken for the next scan.
     expect(await PipelineJob.countDocuments({ activeKey: "pipeline" })).toBe(0);
